@@ -145,6 +145,11 @@ class BRM_RetargetProfile(PropertyGroup):
         description="Whether this profile has saved Work Pose matrices",
         default=False,
     )
+    work_pose_action: PointerProperty(
+        name="Work Pose Action",
+        description="Generated source-side action used as the Work Pose Layer",
+        type=Action,
+    )
     work_pose_editing: BoolProperty(
         name="Work Pose Edit Mode",
         description="Whether this profile is currently editing Work Pose",

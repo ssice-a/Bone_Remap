@@ -45,17 +45,8 @@ def apply_saved_work_pose(context, profile, source_armature: Object) -> int:
     """Apply saved Work Pose matrices to the source armature pose bones."""
 
     reset_source_pose_to_rest(context, source_armature)
-
-    applied = 0
-    for item in profile.work_pose_matrices:
-        pose_bone = source_armature.pose.bones.get(item.bone_name)
-        if pose_bone is None:
-            continue
-        pose_bone.matrix = matrix_from_flat(item.matrix)
-        applied += 1
-
-    context.view_layer.update()
-    return applied
+    matrix_by_bone_name = profile_work_pose_matrix_map(profile)
+    return apply_pose_matrix_map(context, source_armature, matrix_by_bone_name)
 
 
 def reset_source_pose_to_rest(context, source_armature: Object) -> None:
@@ -145,11 +136,11 @@ def _capture_current_pose_matrices(source_armature: Object) -> dict[str, tuple[f
 
 
 def _apply_pose_matrices(context, source_armature: Object, matrices: dict[str, tuple[float, ...]]) -> None:
-    for bone_name, matrix in matrices.items():
-        pose_bone = source_armature.pose.bones.get(bone_name)
-        if pose_bone is not None:
-            pose_bone.matrix = matrix_from_flat(matrix)
-    context.view_layer.update()
+    matrix_by_bone_name = {
+        bone_name: matrix_from_flat(matrix)
+        for bone_name, matrix in matrices.items()
+    }
+    apply_pose_matrix_map(context, source_armature, matrix_by_bone_name)
 
 
 def _classify_work_pose_changes(profile, source_armature: Object, snapshot_matrices: dict[str, tuple[float, ...]]) -> None:
@@ -236,6 +227,63 @@ def _iter_visible_pose_bones(source_armature: Object):
         if getattr(pose_bone.bone, "hide", False):
             continue
         yield pose_bone
+
+
+def profile_work_pose_matrix_map(profile) -> dict[str, Matrix]:
+    return {
+        item.bone_name: matrix_from_flat(item.matrix)
+        for item in profile.work_pose_matrices
+        if item.bone_name
+    }
+
+
+def basis_matrix_map_from_pose_matrices(source_armature: Object, pose_matrix_map: dict[str, Matrix]) -> dict[str, Matrix]:
+    basis_matrix_map = {}
+    for data_bone in _iter_data_bones_depth_first(source_armature):
+        pose_matrix = pose_matrix_map.get(data_bone.name)
+        if pose_matrix is None:
+            continue
+
+        kwargs = {}
+        if data_bone.parent is not None:
+            kwargs["parent_matrix"] = pose_matrix_map.get(
+                data_bone.parent.name,
+                data_bone.parent.matrix_local.copy(),
+            )
+            kwargs["parent_matrix_local"] = data_bone.parent.matrix_local.copy()
+
+        basis_matrix_map[data_bone.name] = data_bone.convert_local_to_pose(
+            pose_matrix,
+            data_bone.matrix_local.copy(),
+            invert=True,
+            **kwargs,
+        )
+    return basis_matrix_map
+
+
+def apply_pose_matrix_map(context, source_armature: Object, pose_matrix_map: dict[str, Matrix]) -> int:
+    basis_matrix_map = basis_matrix_map_from_pose_matrices(source_armature, pose_matrix_map)
+    applied = 0
+    for data_bone in _iter_data_bones_depth_first(source_armature):
+        pose_bone = source_armature.pose.bones.get(data_bone.name)
+        basis_matrix = basis_matrix_map.get(data_bone.name)
+        if pose_bone is not None and basis_matrix is not None:
+            pose_bone.matrix_basis = basis_matrix
+            applied += 1
+    context.view_layer.update()
+    return applied
+
+
+def _iter_data_bones_depth_first(source_armature: Object):
+    for data_bone in source_armature.data.bones:
+        if data_bone.parent is None:
+            yield from _walk_data_bone_tree(data_bone)
+
+
+def _walk_data_bone_tree(data_bone):
+    yield data_bone
+    for child_bone in data_bone.children:
+        yield from _walk_data_bone_tree(child_bone)
 
 
 def flatten_matrix(matrix: Matrix) -> tuple[float, ...]:
@@ -332,12 +380,15 @@ class BRM_OT_work_pose_save(Operator):
         count = capture_work_pose(context, profile, source)
         _classify_work_pose_changes(profile, source, session.original_pose_matrices)
         _finish_edit_session(context, profile, source, restore_pose=False)
+        layered = _ensure_work_pose_layer(context, profile, source)
+        reset_source_pose_to_rest(context, source)
         _solve_live_preview_if_enabled(context, reason="work_pose_saved")
         input_count, output_count, ambiguous_count = classification_summary(profile)
         self.report(
             {"INFO"},
             (
                 f"Saved Work Pose matrices for {count} visible source bones; "
+                f"layered {layered}; "
                 f"classified {input_count} input, {output_count} output, {ambiguous_count} ambiguous."
             ),
         )
@@ -381,9 +432,13 @@ class BRM_OT_work_pose_reset_to_rest(Operator):
         profile.input_compensations.clear()
         profile.classification_report.clear()
         profile.work_pose_saved = False
+        _remove_work_pose_layer(profile, source)
+        reset_source_pose_to_rest(context, source)
 
         if is_work_pose_editing(context, profile, source):
-            reset_source_pose_to_rest(context, source)
+            session = _get_edit_session(context, profile, source)
+            if session is not None:
+                session.original_pose_matrices = _capture_current_pose_matrices(source)
 
         _solve_live_preview_if_enabled(context, reason="work_pose_reset")
         self.report({"INFO"}, "Reset saved Work Pose to Source Rest Pose.")
@@ -470,6 +525,18 @@ def _solve_live_preview_if_enabled(context, reason: str) -> None:
     from . import live_preview
 
     live_preview.solve_if_enabled(context, reason=reason)
+
+
+def _ensure_work_pose_layer(context, profile, source_armature: Object) -> int:
+    from . import work_pose_layer
+
+    return work_pose_layer.ensure_work_pose_layer(context, profile, source_armature)
+
+
+def _remove_work_pose_layer(profile, source_armature: Object) -> bool:
+    from . import work_pose_layer
+
+    return work_pose_layer.remove_work_pose_layer(profile, source_armature)
 
 
 _CLASSES = (

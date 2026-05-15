@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Object, Operator
 
-from . import live_preview, state
+from . import live_preview, state, work_pose, work_pose_layer
 
 
 def ensure_motion_action(profile, source_armature: Object):
@@ -61,6 +61,8 @@ class BRM_OT_motion_edit_enter(Operator):
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
 
+        if work_pose.has_saved_work_pose(profile):
+            work_pose_layer.ensure_work_pose_layer(context, profile, source)
         action = ensure_motion_action(profile, source)
         profile.motion_editing = True
         profile.live_preview_enabled = True

@@ -98,6 +98,8 @@ class BRM_PT_retarget_workbench(Panel):
             text=f"{status_text} ({len(profile.work_pose_matrices)} bones)",
             icon=status_icon,
         )
+        layer_action = profile.work_pose_action.name if profile.work_pose_action is not None else "None"
+        work_pose_box.label(text=f"Layer: {layer_action}", icon="ACTION")
 
         row = work_pose_box.row(align=True)
         row.operator("bone_remap.work_pose_enter", icon="ARMATURE_DATA")

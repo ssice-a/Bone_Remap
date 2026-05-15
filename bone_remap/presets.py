@@ -7,7 +7,7 @@ from bpy.props import StringProperty
 from bpy.types import Operator
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 
-from . import live_preview, mapping, runtime_plan, state
+from . import live_preview, mapping, runtime_plan, state, work_pose_layer
 
 
 PRESET_VERSION = 1
@@ -71,6 +71,11 @@ def import_profile(context, profile, data: dict) -> list[str]:
 
     _replace_matrix_collection(profile.work_pose_matrices, data.get("work_pose_matrices", []), "bone_name")
     profile.work_pose_saved = len(profile.work_pose_matrices) > 0
+    if profile.source_armature is not None:
+        if profile.work_pose_saved:
+            work_pose_layer.ensure_work_pose_layer(context, profile, profile.source_armature)
+        else:
+            work_pose_layer.remove_work_pose_layer(profile, profile.source_armature)
     _replace_matrix_collection(profile.input_compensations, data.get("input_compensations", []), "bone_name")
     _replace_overrides(profile, data.get("classification_overrides", []))
     _replace_matrix_collection(profile.target_bind_matrices, data.get("target_bind_matrices", []), "target_bone_name")

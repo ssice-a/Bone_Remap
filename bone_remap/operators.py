@@ -9,7 +9,11 @@ from . import state
 
 
 def _active_armature(context):
-    obj = context.object
+    selected_armatures = [obj for obj in context.selected_objects if obj.type == "ARMATURE"]
+    if len(selected_armatures) == 1:
+        return selected_armatures[0]
+
+    obj = context.view_layer.objects.active or context.object
     if obj is not None and obj.type == "ARMATURE":
         return obj
     return None
@@ -44,8 +48,8 @@ class BRM_OT_profile_remove(Operator):
 
 class BRM_OT_set_source_from_active(Operator):
     bl_idname = "bone_remap.set_source_from_active"
-    bl_label = "Set Source From Active"
-    bl_description = "Assign the active armature as the Source Armature"
+    bl_label = "Set Source From Selection"
+    bl_description = "Assign the selected armature as the Source Armature; if multiple armatures are selected, use the active one"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -58,6 +62,9 @@ class BRM_OT_set_source_from_active(Operator):
             self.report({"ERROR"}, "Active object is not an armature.")
             return {"CANCELLED"}
 
+        previous_source = profile.source_armature
+        if previous_source is not None and previous_source != armature:
+            _remove_work_pose_layer(profile, previous_source)
         profile.source_armature = armature
         _solve_live_preview_if_enabled(context, reason="source_changed")
         self.report({"INFO"}, f"Source Armature set to {armature.name}")
@@ -66,8 +73,8 @@ class BRM_OT_set_source_from_active(Operator):
 
 class BRM_OT_set_target_from_active(Operator):
     bl_idname = "bone_remap.set_target_from_active"
-    bl_label = "Set Target From Active"
-    bl_description = "Assign the active armature as the Target Armature"
+    bl_label = "Set Target From Selection"
+    bl_description = "Assign the selected armature as the Target Armature; if multiple armatures are selected, use the active one"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -90,6 +97,12 @@ def _solve_live_preview_if_enabled(context, reason: str) -> None:
     from . import live_preview
 
     live_preview.solve_if_enabled(context, reason=reason)
+
+
+def _remove_work_pose_layer(profile, source_armature) -> None:
+    from . import work_pose_layer
+
+    work_pose_layer.remove_work_pose_layer(profile, source_armature)
 
 
 class BRM_OT_report_active_profile(Operator):
