@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Operator
 
-from . import live_preview, mapping, motion_edit, state
+from . import live_preview, motion_edit, runtime_plan, state
 
 
 def bake_active_profile(context):
@@ -15,7 +15,7 @@ def bake_active_profile(context):
 
     profile = active_context.profile
     target = active_context.target_armature
-    target_bone_names = mapping.mapped_target_names(profile)
+    target_bone_names = runtime_plan.mapped_target_names(profile)
     if not target_bone_names:
         return 0, "Mapping Table has no mapped target channels."
 

@@ -6,7 +6,7 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.types import Object, Operator
 
-from . import solver, state
+from . import runtime_plan, solver, state
 
 
 _IS_SOLVING = False
@@ -63,7 +63,7 @@ def _record_live_result(profile, result: solver.SolveResult, reason: str) -> Non
 def clear_live_preview(context, profile, target_armature: Object) -> tuple[int, list[state.ValidationMessage]]:
     target_bone_names = _last_live_written_target_names(profile)
     if not target_bone_names:
-        target_bone_names = _mapped_target_names(profile)
+        target_bone_names = runtime_plan.mapped_target_names(profile)
 
     reset_count, messages = reset_target_channels_to_bind(context, target_armature, target_bone_names)
     profile.live_preview_last_written_targets.clear()
@@ -72,7 +72,10 @@ def clear_live_preview(context, profile, target_armature: Object) -> tuple[int, 
 
 
 def cleanup_removed_target_links(context, profile, target_armature: Object, target_bone_names: list[str]) -> int:
-    removed_names = [name for name in _unique_names(target_bone_names) if not _target_is_mapped(profile, name)]
+    removed_names = [
+        name for name in runtime_plan.unique_names(target_bone_names)
+        if not runtime_plan.target_is_mapped(profile, name)
+    ]
     reset_count, _messages = reset_target_channels_to_bind(context, target_armature, removed_names)
     _remove_last_live_written_targets(profile, removed_names)
     if reset_count:
@@ -92,16 +95,16 @@ def reset_target_channels_to_bind(
         return 0, [state.ValidationMessage("ERROR", "Leave target armature edit mode before clearing live preview.")]
 
     target_writes = {}
-    for target_bone_name in _unique_names(target_bone_names):
+    for target_bone_name in runtime_plan.unique_names(target_bone_names):
         profile = state.get_active_profile(context.scene)
-        bind_matrix = solver.target_bind_matrix_for_bone(target_armature, target_bone_name, profile)
+        bind_matrix = runtime_plan.target_bind_matrix_for_bone(target_armature, target_bone_name, profile)
         if bind_matrix is None:
             messages.append(state.ValidationMessage("ERROR", f"Invalid target bone: {target_bone_name}"))
             continue
         target_writes[target_bone_name] = bind_matrix
 
     written = 0
-    for target_bone_name in solver.target_write_order(target_armature, target_writes):
+    for target_bone_name in runtime_plan.target_write_order(target_armature, target_writes):
         pose_bone = target_armature.pose.bones.get(target_bone_name)
         if pose_bone is None:
             messages.append(state.ValidationMessage("ERROR", f"Invalid target bone: {target_bone_name}"))
@@ -121,22 +124,6 @@ def _last_live_written_target_names(profile) -> list[str]:
     return [item.target_bone_name for item in profile.live_preview_last_written_targets if item.target_bone_name]
 
 
-def _mapped_target_names(profile) -> list[str]:
-    return _unique_names([
-        link.target_bone_name
-        for row in profile.mapping_rows
-        for link in row.target_links
-        if link.target_bone_name
-    ])
-
-
-def _target_is_mapped(profile, target_bone_name: str) -> bool:
-    for row in profile.mapping_rows:
-        if any(link.target_bone_name == target_bone_name for link in row.target_links):
-            return True
-    return False
-
-
 def _remove_last_live_written_targets(profile, target_bone_names: list[str]) -> None:
     removed_names = set(target_bone_names)
     if not removed_names:
@@ -145,16 +132,6 @@ def _remove_last_live_written_targets(profile, target_bone_names: list[str]) -> 
     for index in range(len(profile.live_preview_last_written_targets) - 1, -1, -1):
         if profile.live_preview_last_written_targets[index].target_bone_name in removed_names:
             profile.live_preview_last_written_targets.remove(index)
-
-
-def _unique_names(names: list[str]) -> list[str]:
-    seen = set()
-    unique = []
-    for name in names:
-        if name and name not in seen:
-            seen.add(name)
-            unique.append(name)
-    return unique
 
 
 def _current_context_for_scene(scene):

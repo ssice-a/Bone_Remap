@@ -7,7 +7,7 @@ from bpy.props import StringProperty
 from bpy.types import Operator
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 
-from . import live_preview, mapping, state
+from . import live_preview, mapping, runtime_plan, state
 
 
 PRESET_VERSION = 1
@@ -55,7 +55,7 @@ def export_profile(profile) -> dict:
 
 
 def import_profile(context, profile, data: dict) -> list[str]:
-    old_targets = mapping.mapped_target_names(profile)
+    old_targets = runtime_plan.mapped_target_names(profile)
 
     profile.mapping_rows.clear()
     for row_data in data.get("mapping_rows", []):
@@ -75,7 +75,7 @@ def import_profile(context, profile, data: dict) -> list[str]:
     _replace_overrides(profile, data.get("classification_overrides", []))
     _replace_matrix_collection(profile.target_bind_matrices, data.get("target_bind_matrices", []), "target_bone_name")
 
-    new_targets = set(mapping.mapped_target_names(profile))
+    new_targets = set(runtime_plan.mapped_target_names(profile))
     leaving_targets = [target for target in old_targets if target not in new_targets]
     if profile.target_armature is not None:
         live_preview.cleanup_removed_target_links(context, profile, profile.target_armature, leaving_targets)

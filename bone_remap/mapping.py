@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections import Counter
-
 import bpy
 from bpy.types import Object, Operator
 
-from . import state
+from . import runtime_plan, state
 
 
 def get_active_mapping_row(profile):
@@ -75,51 +73,15 @@ def assign_targets_to_row(profile, row, target_bone_names: list[str]) -> tuple[i
 
 
 def mapped_target_names(profile) -> list[str]:
-    return _unique_names([
-        link.target_bone_name
-        for row in profile.mapping_rows
-        for link in row.target_links
-        if link.target_bone_name
-    ])
+    return runtime_plan.mapped_target_names(profile)
 
 
 def target_is_mapped(profile, target_bone_name: str) -> bool:
-    return any(
-        link.target_bone_name == target_bone_name
-        for row in profile.mapping_rows
-        for link in row.target_links
-    )
+    return runtime_plan.target_is_mapped(profile, target_bone_name)
 
 
 def mapping_health_messages(profile, source_armature: Object | None, target_armature: Object | None) -> list[state.ValidationMessage]:
-    messages: list[state.ValidationMessage] = []
-    duplicate_counts = Counter()
-
-    source_bones = {bone.name for bone in source_armature.pose.bones} if _is_armature(source_armature) else set()
-    target_bones = {bone.name for bone in target_armature.pose.bones} if _is_armature(target_armature) else set()
-
-    for row in profile.mapping_rows:
-        if not row.target_links:
-            messages.append(state.ValidationMessage("WARNING", f"Unmapped row: {row.source_bone_name}"))
-
-        if row.source_bone_name not in source_bones:
-            messages.append(state.ValidationMessage("ERROR", f"Invalid source bone: {row.source_bone_name}"))
-
-        for link in row.target_links:
-            duplicate_counts[link.target_bone_name] += 1
-            if link.target_bone_name not in target_bones:
-                messages.append(state.ValidationMessage("ERROR", f"Invalid target bone: {link.target_bone_name}"))
-
-    for target_bone_name, count in duplicate_counts.items():
-        if count > 1:
-            messages.append(state.ValidationMessage("ERROR", f"Duplicate target assignment: {target_bone_name}"))
-
-    if not profile.mapping_rows:
-        messages.append(state.ValidationMessage("INFO", "Mapping Table is empty."))
-    elif not messages:
-        messages.append(state.ValidationMessage("INFO", "Mapping Table is healthy."))
-
-    return messages
+    return runtime_plan.mapping_health_messages(profile, source_armature, target_armature)
 
 
 def selected_bone_names(context, armature: Object) -> list[str]:

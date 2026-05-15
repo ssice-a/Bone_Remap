@@ -6,7 +6,7 @@ import bpy
 from bpy.types import Operator
 from mathutils import Vector
 
-from . import mapping, state, work_pose
+from . import runtime_plan, state, work_pose
 
 
 def channel_align_active_profile(context) -> tuple[int, str]:
@@ -71,7 +71,7 @@ def refresh_target_bind_active_profile(context) -> tuple[int, str]:
 
     profile = active_context.profile
     target = active_context.target_armature
-    target_names = mapping.mapped_target_names(profile)
+    target_names = runtime_plan.mapped_target_names(profile)
     if not target_names:
         return 0, "Mapping Table has no mapped target channels."
 
