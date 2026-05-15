@@ -7,9 +7,9 @@ Bone Remap treats **Work Pose** as the source-side control baseline: each source
 - Calibrate target bones as the semantic source of pivot and basis.
 - Use source **Control Frames** as the semantic source of pivot and basis, and write the resulting solved matrices into target **Deform Channels**.
 - Preserve target armature hierarchy in the first solver.
-- Normalize mapped target bones into a parentless **Deform Channel Rig** for the first solver.
+- Treat mapped target bones as writable **Deform Channels** for the first solver, with optional target-side normalization as a user command.
 - Duplicate the target armature before normalization.
-- Normalize the active target armature in place.
+- When optional normalization is used, modify the active target armature in place.
 
 **Consequences**
 
@@ -18,10 +18,13 @@ Bone Remap treats **Work Pose** as the source-side control baseline: each source
 - Work Pose calibration must be visible on the Source Armature because those visible Control Frames are the pivots users inspect while driving the Target Armature.
 - Work Pose editing must show the target response live so calibration can be judged by target deformation, not only by source pose appearance.
 - Work Pose editing shows only target feedback from the current Work Pose edit state; it does not play source motion or baked target actions.
+- Work Pose Edit Mode does not require Target Calibration; target feedback is marked unavailable only when mapped target references are unresolved or invalid.
+- Work Pose Live Target Feedback is limited to mapped target Deform Channels from the current Mapping Table; unmapped target bones are not inferred or animated.
 - After Work Pose is saved, normal source playback remains under the source-visible Work Pose layer.
 - After Work Pose is saved, Bone Remap returns to normal preview: the active Motion Action plays under Work Pose Layer and drives the target live.
 - Work Pose editing does not play or evaluate the active Motion Action; it starts from Source Rest Pose or the saved Work Pose.
 - Entering Work Pose Edit Mode captures a temporary Work Pose Edit Snapshot; saving compares the current edit state against that snapshot to detect changed source channels without user marking.
+- Work Pose Edit Snapshot contains source pose transforms and recognized source rig/control properties only; it does not contain Motion Action curves or target pose data.
 - Work Pose is captured from the visible evaluated Source Armature after editing Work Pose; users may use pose rotation, pose scale, IK controls, rig controls, and constraints to place the visible Control Frames.
 - Work Pose Edit Mode allows editing the full visible Source Armature, not only source bones currently present in the Mapping Table, because mapping may still be wrong during calibration.
 - Source rest/edit bones are not modified by the first Work Pose design.
@@ -33,39 +36,66 @@ Bone Remap treats **Work Pose** as the source-side control baseline: each source
 - Saving Work Pose classifies edited source channels before returning to normal preview.
 - Work Pose matrices affect retarget delta measurement but do not modify the Motion Action by themselves.
 - Live Retargeting is the normal unbaked preview path: during playback the Target Armature shows the current retargeted result before any Bake output exists.
+- Live Preview is automatic when enabled; users should not need to press a refresh/apply button after every timeline, pose, Work Pose, or Mapping Table change.
+- Live Preview runs only for the Active Retarget Profile instead of scanning the scene for every possible armature pair.
+- Live Preview can be disabled explicitly to stop automatic live pose writes.
+- Disabling Live Preview stops future automatic writes but leaves the Target Armature in its current pose.
+- Resetting B-side live pose residue to target bind/rest is a separate explicit Clear Live Preview command.
+- Clear Live Preview affects the current Active Retarget Profile's Last Live Written Channels, falling back to current mapped Deform Channels when no last-written set exists.
+- Clear Live Preview does not modify the Source Armature, Work Pose, Motion Action, Mapping Table, target edit-mode bones, or target bind/reference matrices.
+- When a mapping edit removes a previously mapped target Deform Channel from the Mapping Table, that removed channel is reset to target bind/rest to clear live pose residue.
+- Replacing the Mapping Table during preset import uses the same removed-channel cleanup for target channels that disappear from the table.
+- Moving a target Deform Channel between Mapping Rows does not trigger removed-link cleanup because the target remains mapped and the next live solve will overwrite it.
+- Switching the Active Retarget Profile changes future Live Preview writes but does not automatically clear the previous profile's target pose.
+- Live Preview may use dirty flags and cached profile data for performance, but cache invalidation must preserve the same visible result as an immediate solve.
 - Live Retargeting writes solved full matrices to mapped Deform Channels; it does not author target action channels during preview.
+- Live Retargeting writes target pose state only; it does not modify target edit-mode bones, target rest data, or target bind/reference matrices.
 - Bake records the visible target result produced by Live Retargeting into location, rotation, and scale action channels.
 - Target bone rest direction is not assumed to be meaningful.
 - The first solver should transfer full matrix deltas, not rotation-only values.
 - Runtime solve should not continuously edit target rest bones; target head positions may be updated only by an explicit Channel Alignment calibration command, followed by bind refresh.
 - Runtime solve uses each mapped Deform Channel's Target Bind Matrix as the target base.
+- Runtime solve reads the current Target Bind Matrix each frame but does not refresh or rewrite it during playback.
+- Changing the target armature's edit-mode bones is outside live solve and must come from an explicit user action such as Channel Alignment or another Target Calibration command.
 - Channel Alignment, when used, directly changes target edit-mode bone placement; it does not create a separate hidden target application base.
 - Channel Alignment is optional visual alignment; retarget correctness does not require target heads to match source Control Frame pivots.
 - When Channel Alignment is used, it aligns target heads only; target length, roll, constraints, and parent hierarchy are not part of the first retargeting model.
-- First-pass target bones are normalized into independent channels; original target hierarchy restoration or projection is a separate future feature area.
-- Channel Normalization modifies the active target armature directly instead of creating a duplicate rig, keeping the workflow shorter and the core state simpler.
+- First-pass target bones are treated as Deform Channels that receive solved matrices; preserving or projecting a semantic target hierarchy is a separate future feature area.
+- Channel Normalization is optional and, when explicitly used, modifies the active target armature directly instead of creating a duplicate rig.
 - Channel Normalization only touches mapped target bones referenced by the mapping table.
-- The primary Target Calibration path runs normalization and target bind refresh; optional Channel Alignment is a separate command.
-- Live retargeting requires Target Channels Ready: mapped target bones must be normalized into independent Deform Channels and target bind/reference data must be refreshed before realtime solve runs.
-- Bone Remap's first solver deliberately does not support realtime solving through the original target hierarchy.
-- Target Calibration is in-place and limited to mapped Target Links; it must not modify unmapped target bones.
+- Target Calibration is an optional target-side convenience command; it may run normalization, channel alignment, or target bind refresh depending on the explicit user command.
+- Live retargeting does not require Target Calibration or any target-side readiness flag. It uses the current Mapping Table and each mapped Deform Channel's current target bind/reference data.
+- Bone Remap's first solver deliberately does not treat the original target hierarchy as the semantic animation source.
+- Target Calibration is in-place, optional, and limited to mapped Target Links; it must not modify unmapped target bones.
 - Bone Remap supports one-to-many source-to-target mapping, but not many-to-one target mapping.
 - One Deform Channel may have at most one Target Assignment.
 - When a Deform Channel is assigned again, the latest assignment wins and replaces the previous mapping.
 - The mapping table is the live distribution rule: runtime retargeting reads current Mapping Rows and Target Links and distributes solved source matrices accordingly.
 - Mapping table changes affect the next solve and do not require recapturing Work Pose.
-- Target Calibration is repeatable and synchronizes mapped target bones into independent Deform Channels with refreshed target bind/reference data.
-- Target Calibration is a target-bone structure synchronization tool, not a semantic mapping correctness check.
-- Mapping edits affect live distribution immediately; target bones newly introduced by the mapping may require Target Calibration before they are reliable Deform Channels.
+- Mapping authoring is an explicit workbench; automatic mapping suggestions are helper rules, not hidden ownership of the Mapping Table.
+- Mapping authoring uses a source-first row model: users add source Mapping Rows first, then add one or more target links under each source row.
+- The first Mapping Authoring Workbench must support selection-driven source row creation, explicit visible target-channel addition, row/link activation, target-owner reveal, and a mapping health report.
+- Mapping authoring uses a Destination Source Row and one target assignment operation that adds or moves the selected target Deform Channels to that row.
+- The mapping health report includes unmapped mapping rows, duplicate target assignments, and invalid mapping references; it is diagnostic, not proof that the semantic mapping is correct.
+- Bone Remap does not carry forward the old bridge/child-rig auto-build heuristic as the default auto-mapping rule; new rules must be designed around direct Control Frame to Deform Channel mapping.
+- Auto mapping starts from explicit source candidates; the first candidate import command adds source bones that have corresponding weighted vertex groups.
+- Target Calibration is repeatable but never automatic; users run it only when they explicitly want Bone Remap to adjust target bones or refresh target bind/reference data after such changes.
+- Target Calibration is a target-bone convenience tool, not a semantic mapping correctness check.
+- Mapping edits affect live distribution immediately and do not require Target Calibration.
 - Live retargeting uses overwrite writes: mapped Deform Channels are solved from target bind/reference each frame instead of accumulating on the current target pose.
 - Live retargeting does not read existing target animation or target pose as input; motion corrections belong on the source side and are written to the active Motion Action by default.
 - Live retargeting reads Blender's evaluated visible source pose, not raw source action channels.
 - Live retargeting solves in each armature's own object space; source and target object transforms do not define retarget motion.
 - Live retargeting transfers full matrix delta from Work Pose to current evaluated source pose, not rotation-only values.
 - Live retargeting measures delta from the saved Work Pose matrices to the current evaluated visible source pose so Work Pose is not double-applied to the target.
+- The first-version matrix order is fixed as `source_delta = source_live_matrix @ inverse(source_work_pose_matrix)`.
+- Each mapped target link is solved as `target_pose_matrix = source_delta @ target_bind_matrix`.
+- The target pose matrix is written as the live pose result for that Deform Channel; it is not accumulated on the prior target pose.
 - MVP one-to-many mapping uses shared source delta: one Mapping Row computes one full matrix delta, and each Target Link applies that delta to its own target bind/reference.
+- First-version Target Links do not store their own motion offset, weight, or follow rule.
 - MVP excludes per-target weighted follow and per-target driver rules; those remain future advanced features.
 - Bake samples the current target-side visible live retargeting result frame by frame and writes it to a Target Armature action; it is not a separate retargeting algorithm and does not recompute retargeting directly from the source Motion Action.
+- Bake must match the current Live Retargeting preview for the same sampled frame. Future optimized bake paths are allowed only if they are behaviorally equivalent to the live preview result.
 - Bake defaults to the active Motion Action's effective frame range; scene or custom frame ranges require an explicit range override.
 - Bake samples every integer frame in the bake range by default; source keyframe-only sampling is not sufficient for correctness because the visible result may include Work Pose, constraints, IK, drivers, and live retargeting.
 - Curve simplification may be added later as an optional post-process, but it is not part of the first correctness path.
@@ -76,3 +106,4 @@ Bone Remap treats **Work Pose** as the source-side control baseline: each source
 - Bake writes only mapped Deform Channels from the current Mapping Table; unmapped target bones are not written, cleared, inferred, or compensated.
 - When overwriting an existing target action, Bake replaces prior keys only inside the current mapped Deform Channel scope and bake frame range; keys outside that scope or range are left unchanged.
 - Optional Channel Alignment requires a captured Work Pose, because target heads align to source Control Frame pivots.
+- Channel Alignment is the optional target preprocessing step that depends on Work Pose; core live retargeting does not.

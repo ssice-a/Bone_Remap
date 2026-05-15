@@ -7,6 +7,12 @@ Bone Remap treats **Motion Edit Mode** as the user-facing way to correct a motio
 - Store corrections in a separate correction layer.
 - Always duplicate the source action into an editable action.
 - Write edits directly to the active Motion Action by default.
+- Require users to create a Motion Action before manual keyframing.
+- Create or assign an empty Motion Action when entering Motion Edit Mode without one.
+- Restrict manual keying to transform channels managed by Bone Remap.
+- Follow Blender's native key insertion, auto-keying, keying set, and tweak behavior.
+- Let users key the Target Armature as a retarget correction path.
+- Keep retarget correction keyframes source-side.
 - Require users to manually configure Blender's NLA/tweak workflow.
 - Let Bone Remap own Motion Edit Mode setup and teardown.
 - Apply Work Pose Layer through per-frame pose handlers.
@@ -20,7 +26,13 @@ Bone Remap treats **Motion Edit Mode** as the user-facing way to correct a motio
 - Work Pose remains long-lived calibration data and is not used as a per-motion correction layer.
 - Work Pose Layer belongs to the Retarget Profile, not to a Motion Clip.
 - Motion fixes are action-specific because they are written to the Motion Action.
+- Manual keyframes and auto-inserted keyframes in Motion Edit Mode are written to the active Motion Action.
+- If Motion Edit Mode starts without an active Motion Action, Bone Remap creates or assigns an empty Motion Action before accepting manual keyframes.
 - Motion Edit Mode runs under the active Work Pose Layer so users edit the same Final Visible Pose that drives live retargeting.
+- Pressing `I`, using auto-keying, or using Blender keying sets in Motion Edit Mode follows Blender's native keying behavior; Bone Remap does not define a transform-only keying subset.
+- Bone Remap's responsibility is to set up the correct active Motion Action, Work Pose Layer, and edit/tweak context before Blender writes keyframes.
+- Manual keyframing targets source-side bones or rig controls under the Work Pose Layer, not the Target Armature.
+- Target Armature keyframes are outside the retarget correction workflow and can be overwritten by live retargeting pose writes.
 - Preserving an original imported action is an explicit user choice: duplicate the Motion Action before editing.
 - Bone Remap owns entering and exiting Motion Edit Mode; users should not need to manually manage Blender NLA/tweak state.
 - The implementation may use Blender's NLA tweak behavior internally when it is the best fit for editing the Motion Action while viewing the Final Visible Pose.
@@ -29,3 +41,4 @@ Bone Remap treats **Motion Edit Mode** as the user-facing way to correct a motio
 - Bone Remap should not define a separate matrix order for combining Work Pose Layer and Motion Action when Blender-native animation layering can produce the visible result.
 - The evaluated Blender result is the source of truth for live retargeting and bake.
 - Bake samples the same visible result that Motion Edit Mode lets the user inspect and adjust.
+- If the active Motion Action has no usable effective frame range, Bake requires an explicit range override rather than falling back to the scene timeline.

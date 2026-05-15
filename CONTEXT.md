@@ -25,16 +25,40 @@ The existing relationship between a **Target Armature** and its mesh weights tha
 _Avoid_: Rebinding, weight transfer
 
 **Target Bind Matrix**:
-The target-side bind/reference matrix used as the base for solving a **Deform Channel**.
-_Avoid_: Hidden target application frame, source pivot copy
+The target-side bind/reference matrix read as the base for solving a **Deform Channel** each frame.
+_Avoid_: Hidden target application frame, source pivot copy, live-updated solve output
 
 **Target Bind Refresh**:
 An explicit update of target-side bind/reference matrices after calibration changes the **Deform Channel** rest setup.
-_Avoid_: Retarget solve, source pivot alignment
+_Avoid_: Retarget solve, source pivot alignment, automatic mapping side effect
 
 **Retarget Profile**:
 The long-lived calibration record for one **Source Armature** to **Target Armature** pairing.
 _Avoid_: Motion clip, temporary session
+
+**Active Retarget Profile**:
+The single **Retarget Profile** currently used as the runtime context for Bone Remap core commands.
+_Avoid_: Blender selection, inferred scene state, temporary object context
+
+**Source Mesh Set**:
+The source-side mesh objects bound to the **Source Armature** and used as weighted source geometry.
+_Avoid_: Manually registered mesh list, currently selected meshes, target meshes
+
+**Target Mesh Set**:
+The target-side mesh objects bound to the **Target Armature** and used as weighted target geometry.
+_Avoid_: Manually registered mesh list, currently selected meshes, source meshes
+
+**Bound Mesh Discovery**:
+The internal step that derives a **Source Mesh Set** or **Target Mesh Set** from the active profile's armature binding relationships.
+_Avoid_: Saved mesh membership, current selection, arbitrary scene mesh inclusion
+
+**Armature Modifier Binding**:
+A mesh binding relationship where a mesh object has an Armature modifier whose target object is the relevant **Source Armature** or **Target Armature**.
+_Avoid_: Parent-only relationship, name similarity, selected mesh assumption
+
+**Usable Vertex-Group Weight Data**:
+Vertex-group weights where at least one vertex group name exactly matches a bone on the relevant armature and at least one vertex has weight greater than `1e-6` in such a group.
+_Avoid_: Fuzzy bone-name match, prefix/suffix guessing, zero-weight group, unmatched vertex group
 
 **Project Retarget State**:
 The current working state for a **Retarget Profile** inside the active Blender project.
@@ -76,6 +100,10 @@ _Avoid_: Motion Edit Mode, editing the current action
 The temporary source-side state captured when entering **Work Pose Edit Mode** and used during **Work Pose Save** to detect changed source channels.
 _Avoid_: User-authored marker, saved Work Pose data, Motion Action data
 
+**Source Channel Snapshot**:
+The captured source pose channel transforms and source rig/control properties used inside a **Work Pose Edit Snapshot**.
+_Avoid_: Motion Action curves, target pose, Mapping Table data
+
 **Changed Source Channel**:
 A source channel whose value differs from the **Work Pose Edit Snapshot** by more than the configured comparison tolerance during **Work Pose Save**.
 _Avoid_: Every non-default channel, every mapped source bone, user-selected changed flag
@@ -88,6 +116,14 @@ _Avoid_: Mapping-only edit scope, target-link edit scope, prefiltered source con
 The realtime target response shown while editing **Work Pose** or authoring mappings.
 _Avoid_: Motion Action playback, target action playback, offline preview, bake-only validation
 
+**Unavailable Live Target Feedback**:
+The state where target response cannot be shown for unresolved or invalid mapped target references.
+_Avoid_: Failed Work Pose edit, Target Calibration requirement, guessed target response, silent unreliable preview
+
+**Live Feedback Scope**:
+The mapped target **Deform Channels** that can respond during **Live Target Feedback**.
+_Avoid_: Full target armature, unmapped target inference, guessed target response
+
 **Normal Preview**:
 The normal playback state after **Work Pose** has been saved, where the active **Motion Action** plays under the **Work Pose Layer** and drives the target through live retargeting.
 _Avoid_: Work Pose Edit Mode, target bake
@@ -96,9 +132,29 @@ _Avoid_: Work Pose Edit Mode, target bake
 The realtime solve that reads the **Live Evaluated Source Pose** and writes mapped target **Deform Channels** for viewport playback before **Bake**.
 _Avoid_: Baked target playback, source action conversion, target action output
 
+**Live Preview**:
+The user-facing automatic preview state where **Live Retargeting** updates the **Target Armature** from the **Active Retarget Profile**.
+_Avoid_: Bake, manual apply step, hidden always-on solver
+
+**Live Preview Enabled**:
+The explicit setting that allows **Live Preview** to run automatically when relevant source, target, or profile state changes.
+_Avoid_: Bake requirement, target calibration requirement, permanent background solve
+
+**Clear Live Preview**:
+The explicit command that resets target-side pose channels previously written by **Live Preview** back to their target bind/rest pose.
+_Avoid_: Disabling Live Preview, Bake cleanup, source Work Pose reset, target edit-mode change
+
+**Last Live Written Channels**:
+The current **Active Retarget Profile**'s remembered set of target **Deform Channels** most recently written by **Live Matrix Write**.
+_Avoid_: Current Mapping Table only, whole target armature, bake scope
+
+**Removed Target Link Cleanup**:
+The automatic reset of a target **Deform Channel** to its target bind/rest pose when a mapping edit removes that channel from the **Mapping Table** after it may have received live preview writes.
+_Avoid_: Moving target ownership, full Clear Live Preview, Work Pose reset, target edit-mode change
+
 **Live Matrix Write**:
-The live target-side write where **Live Retargeting** applies solved full matrices to mapped **Deform Channels**.
-_Avoid_: Live F-curve write, rotation-only live write, target action authoring
+The live target-side pose write where **Live Retargeting** applies solved full matrices to mapped **Deform Channels**.
+_Avoid_: Live F-curve write, rotation-only live write, target action authoring, target edit-mode modification
 
 **Work Pose Matrix**:
 The full evaluated source pose matrix captured for a **Control Frame**, including translation, rotation, and scale.
@@ -161,24 +217,20 @@ A target-side bone channel that receives solved pose matrices while preserving t
 _Avoid_: Control bone, semantic source bone
 
 **Deform Channel Rig**:
-A **Target Armature** normalized into independent **Deform Channels** for retargeting and export.
-_Avoid_: Original skeleton, semantic hierarchy
+A **Target Armature** viewed by Bone Remap as writable **Deform Channels** for retargeting and export.
+_Avoid_: Semantic animation skeleton, source control rig, mapping table
 
 **Channel Normalization**:
-An explicit in-place calibration operation that detaches mapped target bones into independent **Deform Channels** on the active **Target Armature**.
-_Avoid_: Runtime solve, hierarchy retargeting
+An optional explicit target-side operation that can make mapped target bones easier to solve or inspect as independent **Deform Channels** on the active **Target Armature**.
+_Avoid_: Runtime solve prerequisite, mapping correctness check, automatic mapping side effect
 
 **Channel Alignment**:
 An optional calibration operation that moves **Deform Channel** heads to visually match mapped **Control Frame** pivots.
 _Avoid_: Runtime solve, required retarget correctness
 
 **Target Calibration**:
-The repeatable operation that synchronizes mapped target bones into independent **Deform Channels** and refreshes their target bind/reference data.
-_Avoid_: Mapping correctness check, Work Pose, runtime solve, motion correction
-
-**Target Channels Ready**:
-The state where mapped **Deform Channels** have been normalized into independent channels and their target bind/reference data has been refreshed.
-_Avoid_: Original target hierarchy, uncalibrated target rig
+An optional explicit target-side convenience command for users who want Bone Remap to modify or align mapped target bones and refresh the affected target bind/reference data.
+_Avoid_: Required retarget step, automatic mapping side effect, mapping correctness check, Work Pose, runtime solve, motion correction
 
 **Mapping Row**:
 One source-side row anchored to a **Control Frame**.
@@ -186,11 +238,99 @@ _Avoid_: One-to-one bone pair
 
 **Target Link**:
 One configurable mapped **Deform Channel** attached to a **Mapping Row**.
-_Avoid_: Hidden target selection, implicit child mapping
+_Avoid_: Hidden target selection, implicit child mapping, per-target motion rule
+
+**Source-First Mapping**:
+The mapping authoring pattern where users create a source **Mapping Row** first, then add one or more target **Target Links** under that row.
+_Avoid_: Target-first ownership, flat bone-pair list, one-to-one row model
+
+**Destination Source Row**:
+The **Mapping Row** that receives selected target **Deform Channels** during mapping authoring.
+_Avoid_: Active armature selection, target owner by accident, hidden assignment row
+
+**Selected Target Set**:
+The target-side **Deform Channels** currently selected by the user for mapping authoring.
+_Avoid_: All target bones, current Mapping Row targets, inferred target group
+
+**Active Target Owner**:
+The **Mapping Row** that currently owns the active target **Deform Channel**, if one exists.
+_Avoid_: Destination by default, many-to-one owner, source bone selection
+
+**Target Assignment Operation**:
+The mapping authoring command that assigns the **Selected Target Set** to the **Destination Source Row**.
+_Avoid_: Separate add and move semantics, automatic remapping, target-first mapping
 
 **Mapping Table**:
 The current distribution rule that tells Bone Remap which source **Control Frames** drive which target **Deform Channels**.
 _Avoid_: Calibration result, Work Pose data
+
+**Mapping Authoring Workbench**:
+The user-facing workflow for creating, inspecting, correcting, and validating the **Mapping Table**.
+_Avoid_: Hidden auto-mapper, bridge mapping editor, one-shot import wizard
+
+**Mapping Health Report**:
+The user-visible validation summary for the current **Mapping Table**.
+_Avoid_: Automatic repair, hidden import log, semantic correctness proof
+
+**Unmapped Mapping Row**:
+A **Mapping Row** that has no **Target Links**.
+_Avoid_: Disabled row, invalid source bone, unmapped target bone
+
+**Invalid Mapping Reference**:
+A source or target bone reference in the **Mapping Table** that cannot be resolved on the current armatures.
+_Avoid_: Missing preset file, guessed replacement bone, semantic mismatch
+
+**Duplicate Target Assignment**:
+An invalid or transitional state where one **Deform Channel** is referenced by more than one **Target Link**.
+_Avoid_: Supported many-to-one mapping, blended target ownership
+
+**Auto Mapping Rule**:
+An explicit project-defined rule that proposes **Mapping Table** entries for user review.
+_Avoid_: Old bridge auto-build heuristic, mandatory mapping source, invisible mapping decision
+
+**Auto Mapping Source Candidate**:
+A source bone detected by an auto-mapping command because the current **Retarget Profile** has both that source bone and corresponding weighted source mesh influence.
+_Avoid_: User-managed candidate list, every source bone by default, source control with no mesh influence, hidden helper bone
+
+**Weighted Source Candidate Detection**:
+The internal auto-mapping step that detects source bones with both a real source bone and corresponding weighted source mesh influence.
+_Avoid_: Separate pre-import workflow, add all source bones, name-only source detection, helper-control import
+
+**Auto Map From Work Pose**:
+The single user-facing auto-mapping command that reads the active **Retarget Profile**, requires a saved **Work Pose**, and builds source-to-target **Mapping Table** entries.
+_Avoid_: Rest-pose-only auto mapping, temporary unsaved pose matching, animation-frame matching, target-candidate management workflow
+
+**Weighted Source Region**:
+The source-side weighted geometry associated with a detected **Auto Mapping Source Candidate**, evaluated for comparison under the saved **Work Pose**.
+_Avoid_: Source bone transform alone, source bone name alone, target mesh region
+
+**Weighted Target Region**:
+The target-side weighted geometry associated with a target **Deform Channel** or derived **Target Seam Cluster**.
+_Avoid_: Target bone transform alone, target bone name alone, source mesh region
+
+**Auto Mapping Comparison Space**:
+The normalized internal coordinate space used by auto mapping to compare **Weighted Source Regions** and **Weighted Target Regions** after centering and scaling source and target geometry independently.
+_Avoid_: Raw world-space distance, armature-object transform matching, semantic proof
+
+**Auto Mapping Geometry Score**:
+The first-version auto-mapping score based on weighted region proximity, region bounds/overlap, and target seam consistency.
+_Avoid_: Skeleton hierarchy reasoning, target bone direction, IK/FK semantic inference, body-part classifier
+
+**Auto Mapping Acceptance Condition**:
+The internal condition that decides whether an auto-mapping candidate is reliable enough to write into the **Mapping Table**.
+_Avoid_: User-facing score tuning, force-map-every-target behavior, hidden semantic certainty
+
+**Target Seam Cluster**:
+A group of target **Deform Channels** whose weighted vertex groups appear to represent one continuous target-side semantic region across split mesh seams.
+_Avoid_: Merged vertex group, renamed target bone, required one-to-one target bone, first-version user-facing editor concept
+
+**Target Geometry Evidence**:
+Target-side weighted vertex positions, seam clusters, point-cloud shape, and weight distribution used by auto mapping.
+_Avoid_: Target bone transform, target animation, source action curve
+
+**Target Bone Transform Evidence**:
+Target-side bone head, tail, axis, or matrix information used only as weak supporting evidence during auto mapping.
+_Avoid_: Primary target identity, required target pivot, reliable target hierarchy
 
 **Target Assignment**:
 The ownership of one **Deform Channel** by one **Target Link**.
@@ -208,6 +348,10 @@ _Avoid_: Raw Motion Action, unevaluated pose channels, target pose
 The Blender-native evaluation result of the active **Work Pose Layer**, **Motion Action**, source constraints, IK, drivers, and rig controls.
 _Avoid_: Hand-rolled NLA math, manual matrix layer order
 
+**Blender Native Keying**:
+Blender's built-in key insertion, auto-keying, keying sets, and action/tweak behavior used while editing a **Motion Action**.
+_Avoid_: Bone Remap custom keying subset, transform-only restriction
+
 **Motion Clip**:
 A source-side animation unit that uses one **Motion Action** and owns action-specific settings.
 _Avoid_: Retarget profile, baked target action
@@ -219,6 +363,10 @@ _Avoid_: Hidden correction layer, mandatory action copy, Work Pose
 **Motion Edit Mode**:
 The Bone Remap-managed mode for editing the active **Motion Clip** while viewing the **Final Visible Pose**.
 _Avoid_: Work Pose edit, target calibration, target bake, manual Blender NLA setup
+
+**Manual Motion Keyframing**:
+User-inserted or auto-inserted source-side keyframes authored through **Blender Native Keying** during **Motion Edit Mode** and written to the active **Motion Action**.
+_Avoid_: Target Armature keying, Work Pose Save, baked target edits, Bone Remap-only channel filter
 
 **Source Pose Stack**:
 The ordered source-side layers that produce the **Final Visible Pose**.
@@ -280,6 +428,10 @@ _Avoid_: World-space retargeting, object-transform-driven fitting
 The source motion delta measured as a complete matrix difference from **Work Pose Matrix** to **Live Evaluated Source Pose**.
 _Avoid_: Rotation-only retargeting
 
+**Solved Target Pose Matrix**:
+The target-side pose matrix produced by applying a source **Full Matrix Delta** to a target **Target Bind Matrix**.
+_Avoid_: Target rest edit, target action keyframe, accumulated target pose
+
 **Shared Source Delta**:
 The one-to-many distribution rule where one **Mapping Row** computes one **Full Matrix Delta** and all of its **Target Links** receive that same delta against their own target bind/reference.
 _Avoid_: Per-target weighted follow, per-target driver rule
@@ -287,9 +439,27 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 ## Relationships
 
 - A **Retargeting Workbench** has exactly one active **Source Armature** and one active **Target Armature**.
+- A **Retargeting Workbench** has exactly one **Active Retarget Profile**.
+- The **Active Retarget Profile** is the only runtime context for Bone Remap core commands.
+- Switching the **Active Retarget Profile** changes which profile receives future core commands and **Live Preview** updates.
+- Switching the **Active Retarget Profile** does not automatically run **Clear Live Preview** on the previous profile.
 - A **Retarget Profile** belongs to one **Source Armature** and **Target Armature** pairing.
+- A **Retarget Profile** explicitly stores its **Source Armature**, **Target Armature**, **Mapping Table**, **Work Pose**, and motion clip list.
+- Optional **Target Calibration** may leave target-side metadata or reports for inspection, but that metadata is not a required state for core retargeting commands.
+- A **Retarget Profile** does not store **Source Mesh Set** or **Target Mesh Set** in the first design.
+- **Source Mesh Set** and **Target Mesh Set** are derived through **Bound Mesh Discovery** from the active profile's armatures.
+- **Bound Mesh Discovery** only includes mesh objects with **Armature Modifier Binding** to the relevant armature.
+- **Bound Mesh Discovery** requires discovered mesh objects to have **Usable Vertex-Group Weight Data**.
+- **Bound Mesh Discovery** does not infer binding from object parent relationships or object names.
+- If a mesh has multiple Armature modifiers, **Bound Mesh Discovery** includes it for an armature when any Armature modifier targets that armature.
+- A mesh must not belong to both the **Source Mesh Set** and **Target Mesh Set**; that overlap is a profile configuration error.
+- Missing discovered meshes do not make the whole **Retarget Profile** invalid, but commands that require weighted geometry must fail clearly instead of guessing.
+- Vertex groups that do not exactly match a bone name on the relevant armature are ignored during mesh discovery and auto mapping.
+- Bone Remap does not fuzzy-match, repair, or guess vertex-group names during first-version **Bound Mesh Discovery**.
 - A **Retarget Profile** is stored as **Project Retarget State** by default.
 - **Project Retarget State** keeps the current working setup for the active Blender project.
+- Core commands read the **Active Retarget Profile** instead of inferring objects from transient Blender selection.
+- Blender selection may help fill profile fields or drive manual mapping operations, but it does not define the runtime context for core commands.
 - A **Retarget Preset** is created explicitly when the user wants reusable data outside the current project.
 - A **Retarget Preset** may contain a full **Retarget Profile** or selected reusable parts such as **Mapping Table** or **Work Pose** data.
 - A **Retarget Preset** does not contain **Motion Action** data by default.
@@ -301,6 +471,7 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - Bone Remap does not fuzzy-match **Bone Name References** during preset import by default.
 - **Preset Import** replaces the current **Mapping Table** with the preset's **Mapping Table**.
 - **Preset Import** does not merge imported mappings with the existing **Mapping Table**.
+- **Preset Import** runs **Removed Target Link Cleanup** for previously mapped target **Deform Channels** that leave the **Mapping Table** after replacement.
 - If **Preset Import** produces **Missing Bone References**, old mappings are not kept as fallback mappings.
 - A **Retarget Profile** owns one active **Work Pose**.
 - A **Retarget Profile** owns the **Work Pose Layer** produced from its **Work Pose**.
@@ -314,14 +485,28 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - The visible evaluated **Source Armature** is the user-facing control surface for retargeting.
 - Bone Remap's realtime workflow is WYSIWYG relative to the **Source Armature**, not a hidden intermediate skeleton.
 - **Live Retargeting** is the normal unbaked preview path.
+- **Live Preview** is automatic only when **Live Preview Enabled** is on.
+- **Live Preview** runs from the **Active Retarget Profile**; it does not scan the scene for other profiles or armatures to update.
+- **Live Preview** updates after relevant Blender evaluation changes, timeline/playback changes, source pose edits, **Work Pose** changes, **Mapping Table** changes, or target bind/reference changes.
+- **Live Preview** may use dirty flags and cached profile data for performance, but caching must not change the visible result.
+- Disabling **Live Preview Enabled** stops future automatic **Live Matrix Write** operations but does not reset the **Target Armature**.
+- **Clear Live Preview** is the explicit command for resetting B-side live pose residue to target bind/rest.
+- **Clear Live Preview** affects the current **Active Retarget Profile**'s **Last Live Written Channels**.
+- If **Last Live Written Channels** is empty, **Clear Live Preview** falls back to the current mapped **Deform Channels**.
+- **Clear Live Preview** does not modify the **Source Armature**, **Work Pose**, **Motion Action**, **Mapping Table**, target edit-mode bones, or **Target Bind Matrix** values.
+- A previously active profile's target armature may remain in its last preview pose until the user explicitly clears or changes it.
 - **Live Retargeting** lets the **Target Armature** show the current retargeted result during playback without requiring **Bake**.
 - **Live Retargeting** uses **Live Matrix Write** for mapped **Deform Channels**.
 - **Live Matrix Write** applies the solved full matrix result; it does not author target action channels.
+- **Live Matrix Write** modifies target pose state only; it does not modify target edit-mode bones, target rest data, or **Target Bind Matrix** values.
 - **Bake** converts the current visible target result into keyable action channels after **Live Retargeting** has produced it.
 - **Work Pose** calibration must be visible on the **Source Armature** because those visible **Control Frames** are the pivots users inspect while driving the **Target Armature**.
 - **Work Pose Edit Mode** starts from **Source Rest Pose** when no **Work Pose** has been saved.
 - **Work Pose Edit Mode** starts from the saved **Work Pose** when one exists.
 - Entering **Work Pose Edit Mode** captures a **Work Pose Edit Snapshot**.
+- A **Work Pose Edit Snapshot** contains **Source Channel Snapshots** for the full visible **Source Armature** and recognized source rig/control properties.
+- A **Work Pose Edit Snapshot** does not contain **Motion Action** curves.
+- A **Work Pose Edit Snapshot** does not contain target pose data.
 - Resetting **Work Pose** back to **Source Rest Pose** requires an explicit user command.
 - **Work Pose Edit Mode** is isolated from the active **Motion Clip** and **Motion Action**.
 - **Work Pose Edit Mode** does not play or evaluate the active **Motion Action**.
@@ -330,6 +515,13 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - Users may edit source bones before their mapping has been finalized so mapping mistakes can be discovered through **Live Target Feedback**.
 - **Work Pose Edit Mode** shows **Live Target Feedback** from the current edited **Work Pose** state.
 - **Live Target Feedback** during **Work Pose Edit Mode** does not come from the active **Motion Action** or a **Baked Target Action**.
+- **Work Pose Edit Mode** does not require **Target Calibration**.
+- **Live Target Feedback** uses the target armature's current bind/reference state unless the user has explicitly run an optional **Target Calibration** command.
+- **Unavailable Live Target Feedback** is used only for unresolved or invalid mapped target references.
+- **Live Target Feedback** uses the current **Mapping Table** to define its **Live Feedback Scope**.
+- The **Live Feedback Scope** contains only mapped target **Deform Channels**.
+- **Live Target Feedback** does not infer or animate unmapped target bones.
+- If editing a source area produces no target response, that absence can indicate missing or incorrect mapping.
 - **Work Pose** is captured from the visible evaluated **Source Armature** after editing **Work Pose**.
 - **Work Pose Edit Mode** may use source pose rotation, pose scale, IK controls, rig controls, and constraints to place visible **Control Frames**.
 - **Work Pose Edit Mode** does not modify the source rest skeleton.
@@ -371,22 +563,25 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - Live retargeting reads **Live Evaluated Source Pose**, not raw **Motion Action** channels.
 - **Live Evaluated Source Pose** includes **Work Pose Layer**, source animation, source constraints, IK, drivers, and rig controls as evaluated by Blender.
 - **Live Evaluated Source Pose** is defined by **Blender Layer Evaluation**, not by Bone Remap reimplementing Blender's animation layer math.
-- A **Target Armature** is normalized into a **Deform Channel Rig** before first-pass retargeting.
-- A **Deform Channel Rig** exposes independent **Deform Channels** that receive the realtime retargeted pose.
-- **Channel Normalization** modifies only mapped **Deform Channels** on the active **Target Armature**.
-- **Target Bind Refresh** preserves target-side bind/reference data after calibration changes **Deform Channel** rest setup.
+- A **Target Armature** is treated as a **Deform Channel Rig** by the solver, even when no optional **Target Calibration** has been applied.
+- A **Deform Channel Rig** exposes mapped **Deform Channels** that receive the realtime retargeted pose.
+- **Channel Normalization**, when explicitly used, modifies only mapped **Deform Channels** on the active **Target Armature**.
+- **Target Bind Refresh** preserves target-side bind/reference data after optional calibration changes **Deform Channel** rest setup.
 - Runtime retargeting uses each mapped **Deform Channel**'s **Target Bind Matrix** as the target base.
+- Runtime retargeting reads the current **Target Bind Matrix** but does not refresh or rewrite it during playback.
+- Changing the target armature's edit-mode bones is outside live solve and must come from an explicit user action such as **Channel Alignment** or another **Target Calibration** command.
 - **Channel Alignment** directly modifies target edit-mode bone placement when used; it does not create a separate hidden target base.
-- **Target Calibration** runs **Channel Normalization** and **Target Bind Refresh** for all mapped **Target Links**.
-- **Target Calibration** produces **Target Channels Ready** for mapped target bones.
+- **Target Calibration** may run **Channel Normalization**, **Channel Alignment**, and **Target Bind Refresh** for mapped **Target Links**, depending on the explicit user command.
+- Optional **Target Calibration** results do not prove that **Work Pose** or **Mapping Table** semantics are correct.
 - **Target Calibration** does not modify unmapped target bones.
-- **Target Calibration** is an in-place calibration of the active **Target Armature**.
-- **Target Calibration** is repeatable and synchronizes the active **Target Armature** to the current **Mapping Table**.
-- **Target Calibration** is a target-bone structure synchronization tool; it does not validate whether the mapping is semantically correct.
-- Changing the **Mapping Table** changes runtime distribution immediately, but target bones newly introduced by the mapping may require **Target Calibration** before they are reliable **Deform Channels**.
-- Live retargeting requires **Target Channels Ready**.
+- **Target Calibration** is an in-place optional edit of the active **Target Armature**.
+- **Target Calibration** is repeatable but never automatic.
+- **Target Calibration** is a target-bone convenience tool; it does not validate whether the mapping is semantically correct.
+- Changing the **Mapping Table** changes runtime distribution immediately and does not require **Target Calibration**.
+- Live retargeting does not require **Target Calibration** or any target-side readiness flag.
 - **Channel Alignment** is optional and exists for visual clarity or authoring comfort, not for retarget correctness.
 - **Channel Alignment** requires **Work Pose** because **Control Frames** provide the alignment pivots.
+- When **Channel Alignment** is used, that optional preprocessing step depends on the current **Work Pose** result.
 - Retargeting does not require **Deform Channel** heads to align with **Control Frame** pivots.
 - A **Mapping Row** may own multiple **Target Links**.
 - One **Deform Channel** may have at most one **Target Assignment**.
@@ -395,6 +590,72 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - The **Mapping Table** is the live distribution rule for retargeting.
 - Runtime retargeting reads the current **Mapping Table** and distributes solved source matrices according to its current **Mapping Rows** and **Target Links**.
 - Changing the **Mapping Table** changes what Bone Remap distributes on the next solve; it does not require recapturing **Work Pose**.
+- **Mapping Authoring Workbench** owns the workflows for building and correcting the **Mapping Table**.
+- **Mapping Authoring Workbench** uses **Source-First Mapping**.
+- **Mapping Authoring Workbench** supports creating **Mapping Rows** from selected source bones.
+- **Mapping Authoring Workbench** supports adding selected target **Deform Channels** to the active **Mapping Row**.
+- A source **Mapping Row** may contain many **Target Links**.
+- **Mapping Authoring Workbench** uses one **Destination Source Row** for target assignment.
+- A **Destination Source Row** can be chosen from the source row list without switching the active Blender armature.
+- **Mapping Authoring Workbench** uses the **Selected Target Set** as the target-side input for assignment.
+- The **Active Target Owner** is displayed for inspection and can be explicitly used to fill the **Destination Source Row**.
+- The **Active Target Owner** does not automatically replace the **Destination Source Row**.
+- A **Target Assignment Operation** assigns every channel in the **Selected Target Set** to the **Destination Source Row**.
+- A **Target Assignment Operation** adds unmapped targets, moves targets owned by other rows, and leaves already-owned targets unchanged.
+- Moving a target **Deform Channel** from one **Mapping Row** to another is not **Removed Target Link Cleanup** because the target remains mapped.
+- When a mapping edit makes a previously mapped target **Deform Channel** leave the **Mapping Table**, **Removed Target Link Cleanup** resets that channel to target bind/rest.
+- **Removed Target Link Cleanup** does not modify the **Source Armature**, **Work Pose**, **Motion Action**, target edit-mode bones, or **Target Bind Matrix** values.
+- After **Removed Target Link Cleanup**, that channel is removed from **Last Live Written Channels** for the current **Active Retarget Profile**.
+- **Mapping Authoring Workbench** keeps target-side candidate **Deform Channels** visible for explicit user addition.
+- Activating a **Mapping Row** highlights its **Target Links**.
+- Activating a target **Deform Channel** that already has a **Target Assignment** can reveal its owning **Mapping Row**.
+- **Mapping Authoring Workbench** shows a **Mapping Health Report**.
+- A **Mapping Health Report** includes **Unmapped Mapping Rows**, **Duplicate Target Assignments**, and **Invalid Mapping References**.
+- **Duplicate Target Assignments** should normally be zero because **Target Assignment** is unique and latest assignment wins.
+- **Mapping Health Report** helps diagnose missing or incorrect mappings, but it does not prove semantic mapping correctness.
+- **Auto Mapping Rules** may propose mappings, but the **Mapping Table** remains user-reviewable and editable.
+- Bone Remap does not inherit the old bridge/child-rig auto-build heuristic as its default **Auto Mapping Rule**.
+- New **Auto Mapping Rules** must be designed for direct Source-to-Target **Control Frame** to **Deform Channel** mapping.
+- **Auto Map From Work Pose** is a single command, not a multi-step candidate-management workflow.
+- **Auto Map From Work Pose** reads its source and target objects from the active **Retarget Profile**, not from transient Blender selection.
+- **Auto Map From Work Pose** reads all source meshes and all target meshes derived by **Bound Mesh Discovery** from the active profile's armatures.
+- **Auto Map From Work Pose** fails clearly when **Bound Mesh Discovery** finds no usable **Source Mesh Set** or no usable **Target Mesh Set**.
+- **Auto Map From Work Pose** does not fall back to target bone positions when weighted source or target geometry is unavailable.
+- **Auto Map From Work Pose** detects **Auto Mapping Source Candidates** during the command by using **Weighted Source Candidate Detection**.
+- **Weighted Source Candidate Detection** includes source bones that have both a source bone and corresponding weighted source mesh influence.
+- **Weighted Source Candidate Detection** excludes source bones that have no corresponding weighted source mesh influence.
+- **Weighted Source Candidate Detection** uses **Usable Vertex-Group Weight Data** to decide whether a source bone has weighted source mesh influence.
+- Helper, IK, or control-only source bones are not auto-mapping source candidates unless they have source mesh influence.
+- **Auto Map From Work Pose** uses the saved **Work Pose**, not a temporary unsaved source pose, as the source-side comparison pose.
+- **Auto Map From Work Pose** is unavailable until the active **Retarget Profile** has a saved **Work Pose**.
+- **Auto Map From Work Pose** derives its target-side input from target **Deform Channels** with target mesh influence in the active **Retarget Profile**.
+- **Auto Map From Work Pose** does not require or save a separate target candidate list.
+- **Auto Map From Work Pose** matches **Weighted Source Regions** against **Weighted Target Regions**; it does not match source bones to the target mesh by bone transforms alone.
+- **Auto Map From Work Pose** compares regions in **Auto Mapping Comparison Space** rather than raw world space.
+- **Auto Mapping Comparison Space** normalizes source and target geometry independently so size and object-placement differences do not dominate matching.
+- **Auto Mapping Comparison Space** preserves handedness and does not mirror either side by default.
+- First-version **Auto Map From Work Pose** uses **Auto Mapping Geometry Score** for matching.
+- First-version **Auto Map From Work Pose** does not use source/target skeleton hierarchy reasoning, target bone direction, IK/FK semantics, or body-part classification.
+- **Auto Map From Work Pose** only writes candidates that pass the **Auto Mapping Acceptance Condition**.
+- **Auto Map From Work Pose** leaves target **Deform Channels** unmapped when no candidate passes the acceptance condition.
+- **Auto Map From Work Pose** does not force every target **Deform Channel** to match a source.
+- First-version **Auto Map From Work Pose** does not expose score thresholds as user-facing controls.
+- **Auto Map From Work Pose** does not clear the current **Mapping Table** before running.
+- **Auto Map From Work Pose** prefers **Target Geometry Evidence** over **Target Bone Transform Evidence**.
+- **Target Bone Transform Evidence** is weak by default because target bones may be generated, vertical, arbitrary, or only optionally aligned.
+- **Target Seam Clusters** let auto mapping propose one source **Mapping Row** for multiple target **Deform Channels** that meet at split mesh seams.
+- **Target Seam Clusters** are internal to auto mapping in the first design and are not shown as a separate user-facing list.
+- **Target Seam Clusters** are derived during auto mapping and are not saved in the **Retarget Profile** or **Retarget Preset**.
+- Auto mapping keeps its user-facing result simple: matched target channels are assigned into the **Mapping Table**, and unmatched target channels remain available for manual mapping.
+- Auto mapping does not expose detailed confidence bands or scoring evidence in the first design.
+- Auto mapping uses normal **Target Assignment Operation** semantics: matched target channels overwrite previous ownership, and unmatched existing mappings are left unchanged.
+- Auto mapping ownership overwrite is not **Removed Target Link Cleanup** when the target **Deform Channel** remains in the **Mapping Table**.
+- Auto mapping only triggers **Removed Target Link Cleanup** for target **Deform Channels** that leave the **Mapping Table**.
+- Auto mapping does not run **Target Calibration** automatically.
+- Auto mapping does not create or update any **Target Calibration** requirement flag; calibration remains an optional user command.
+- Auto mapping treats source armature bones as read-only; it may update **Mapping Rows** and **Target Links**, but it does not edit source bone data.
+- Auto mapping may create missing **Mapping Rows** for matched source bones; this creates mapping data only and does not create source bones.
+- Auto mapping only creates **Mapping Rows** for matched **Auto Mapping Source Candidates** detected during that command.
 - Mapping authoring keeps target-side **Deform Channels** visible for explicit addition.
 - Unmapped target bones are outside Bone Remap's retargeting, calibration, and bake scope.
 - Runtime retargeting writes all mapped **Target Links** and resets those **Deform Channels** to bind/rest before solving.
@@ -405,13 +666,21 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - Live retargeting transfers **Full Matrix Delta** from source **Control Frames** to mapped target **Deform Channels**.
 - **Full Matrix Delta** preserves translation, rotation, and scale effects captured by **Work Pose**.
 - **Full Matrix Delta** is measured from **Work Pose Matrix** to **Live Evaluated Source Pose** so Work Pose itself is not double-applied to the target.
+- **Live Matrix Write** writes the **Solved Target Pose Matrix** for each mapped **Target Link**.
 - Live retargeting uses **Shared Source Delta** for one-to-many mapping.
 - In **Shared Source Delta**, one **Mapping Row** computes source motion once, and each **Target Link** applies it to its own target bind/reference.
+- First-version **Target Links** do not define their own motion offset, weight, or follow rule.
 - Corrections to retargeted motion should be authored on the source side through **Motion Edit Mode**.
 - A **Retarget Profile** stores long-lived calibration data; a **Motion Clip** stores action-specific data.
 - **Work Pose Layer** belongs to the **Retarget Profile**, not to a **Motion Clip**.
 - A **Motion Clip** uses one active **Motion Action**.
 - By default, **Motion Edit Mode** writes user edits directly to the active **Motion Action**.
+- **Manual Motion Keyframing** belongs to the current **Motion Clip**'s active **Motion Action**.
+- If **Motion Edit Mode** starts without an active **Motion Action**, Bone Remap creates or assigns an empty **Motion Action** before accepting manual keyframes.
+- **Manual Motion Keyframing** follows **Blender Native Keying**; Bone Remap does not redefine which source-side properties Blender can key.
+- Bone Remap's responsibility is to enter the correct **Motion Edit Mode**, active **Motion Action**, and **Work Pose Layer** context before Blender keying writes.
+- **Manual Motion Keyframing** keys source-side bones or rig controls under the active **Work Pose Layer**, not the **Target Armature**.
+- Target-side keyframes are outside the retarget correction workflow and can be overwritten by **Live Matrix Write**.
 - Users enter and exit **Motion Edit Mode** through Bone Remap controls.
 - A user may duplicate a **Motion Action** before editing when preserving the original action matters.
 - **Motion Edit Mode** runs under the active **Work Pose Layer**.
@@ -422,7 +691,10 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - The **Bake Source** is the target-side visible result produced by current Live Retargeting.
 - **Bake** does not reinterpret source F-curves or bypass **Work Pose**, **Mapping Table**, or Live Retargeting.
 - **Bake** does not recompute retargeting directly from the **Motion Action**.
+- **Bake** must not produce a result that differs from the current Live Retargeting preview for the same frame.
+- If the preview result is wrong, the retargeting setup or live solve is wrong; **Bake** is not a second correction path.
 - The default **Bake Range** comes from the active **Motion Action**'s effective frame range.
+- If the active **Motion Action** has no usable effective frame range, **Bake** requires a **Bake Range Override**.
 - Users may set a **Bake Range Override** when they need a scene range or custom frame range.
 - **Bake** does not default to the whole scene timeline.
 - **Bake Sampling** captures the **Bake Source** on each integer frame inside the **Bake Range** by default.
@@ -461,22 +733,22 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 > **Domain expert:** "No. **Control Frames** define the source-side pivots; **Channel Alignment** is only an optional visual alignment command."
 
 > **Dev:** "Should a deep target hierarchy participate in the first retargeting solver?"
-> **Domain expert:** "No. **Channel Normalization** turns mapped target bones into a **Deform Channel Rig** so each channel is solved independently."
+> **Domain expert:** "No. The first solver treats mapped target bones as **Deform Channels**. Optional **Channel Normalization** may make them easier to inspect or solve, but live retargeting is not gated on that button."
 
 > **Dev:** "Should normalization create a duplicate rig?"
-> **Domain expert:** "No. **Channel Normalization** modifies the active **Target Armature** directly to avoid extra workflow steps."
+> **Domain expert:** "No. If the user explicitly runs **Channel Normalization**, it modifies the active **Target Armature** directly to avoid extra workflow steps."
 
 > **Dev:** "Should Target Calibration always move target bone heads to source pivots?"
-> **Domain expert:** "No. **Target Calibration** prepares mapped **Deform Channels** and refreshes target bind data; **Channel Alignment** is a separate optional command."
+> **Domain expert:** "No. **Target Calibration** is itself an optional target-side convenience command. **Channel Alignment** is one possible calibration action, and it exists for readability and authoring comfort."
 
 > **Dev:** "What target-side base does the solver use?"
 > **Domain expert:** "It uses the **Target Bind Matrix**. If **Channel Alignment** is used, it directly edits target bone placement and bind data is refreshed."
 
 > **Dev:** "Can live retargeting run before mapped target bones are detached into independent channels?"
-> **Domain expert:** "No. Live retargeting requires **Target Channels Ready**, and **Target Calibration** produces that state."
+> **Domain expert:** "Yes. Live retargeting uses the current target bind/reference data and current **Mapping Table**. **Target Calibration** is optional and must not become a hidden prerequisite."
 
 > **Dev:** "Should Target Calibration process the whole target armature?"
-> **Domain expert:** "No. It only processes mapped **Target Links** and does not touch unmapped target bones."
+> **Domain expert:** "No. When explicitly used, it only processes mapped **Target Links** and does not touch unmapped target bones."
 
 > **Dev:** "Can Channel Alignment run before Work Pose exists?"
 > **Domain expert:** "No. **Channel Alignment** needs **Control Frames**, and those come from **Work Pose**."
@@ -487,6 +759,9 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 > **Dev:** "How does Bone Remap know what changed when the user saves Work Pose?"
 > **Domain expert:** "It compares the current edit state to the **Work Pose Edit Snapshot** captured when entering Work Pose Edit Mode. The user only edits and saves."
 
+> **Dev:** "What does the Work Pose Edit Snapshot contain?"
+> **Domain expert:** "It contains **Source Channel Snapshots** for source pose transforms and recognized source rig/control properties. It does not store Motion Action curves or target pose data."
+
 > **Dev:** "Can Work Pose Edit Mode play the active Motion Action?"
 > **Domain expert:** "No. **Work Pose Edit Mode** does not play or evaluate the active **Motion Action**; Work Pose remains long-lived calibration, not a captured animation frame."
 
@@ -496,8 +771,14 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 > **Dev:** "During Work Pose editing, should the target play the source motion or a baked action?"
 > **Domain expert:** "No. **Work Pose Edit Mode** is isolated from motion playback. The target only shows **Live Target Feedback** from the current Work Pose edit state."
 
+> **Dev:** "Can users enter Work Pose Edit Mode before running optional Target Calibration?"
+> **Domain expert:** "Yes. **Work Pose Edit Mode** does not require **Target Calibration**. Target feedback is unavailable only for unresolved or invalid mapped target references."
+
 > **Dev:** "Should Work Pose Edit Mode only allow editing currently mapped source bones?"
 > **Domain expert:** "No. The **Work Pose Editable Source Scope** is the full visible Source Armature because mapping may still be wrong while calibration is being authored."
+
+> **Dev:** "Should Live Target Feedback animate target bones that are not in the mapping table?"
+> **Domain expert:** "No. **Live Feedback Scope** comes from the current **Mapping Table**; missing target response is useful evidence that mapping may be missing or wrong."
 
 > **Dev:** "Can Work Pose calibration use scale or IK controls?"
 > **Domain expert:** "Yes. **Work Pose Edit Mode** may use pose scale, IK controls, rig controls, and constraints as long as the visible evaluated **Source Armature** provides the **Control Frames**."
@@ -571,11 +852,35 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 > **Dev:** "If the mapping table changes, does Work Pose need to be rebuilt?"
 > **Domain expert:** "No. The **Mapping Table** is the live distribution rule; changing it changes matrix distribution on the next solve."
 
+> **Dev:** "Should Bone Remap reuse the old plugin's bridge auto-build heuristic as the default auto-mapper?"
+> **Domain expert:** "No. **Auto Mapping Rules** must be redesigned for direct Source-to-Target retargeting; old bridge heuristics are only reference material."
+
+> **Dev:** "Should Auto Mapping consider every source bone by default?"
+> **Domain expert:** "No. **Auto Map From Work Pose** uses **Weighted Source Candidate Detection** during the command, so default source candidates are source bones with matching weighted source mesh influence."
+
+> **Dev:** "Should Auto Mapping require users to manage a target candidate list?"
+> **Domain expert:** "No. **Auto Map From Work Pose** is a single command. It derives target-side input from weighted target **Deform Channels** in the active **Retarget Profile** and writes matched results into the **Mapping Table**."
+
+> **Dev:** "What should the first Mapping Authoring Workbench make obvious?"
+> **Domain expert:** "Users must be able to add source rows from selected source bones, add visible target channels to the active row, inspect ownership, and read a **Mapping Health Report**."
+
+> **Dev:** "Should users build mappings as flat source-target pairs?"
+> **Domain expert:** "No. Bone Remap uses **Source-First Mapping**: add the source Mapping Row first, then add many target links under that row."
+
+> **Dev:** "When remapping target bones, should add and move be separate concepts?"
+> **Domain expert:** "No. A **Target Assignment Operation** always assigns the **Selected Target Set** to the **Destination Source Row**; it adds, moves, or leaves targets unchanged as needed."
+
+> **Dev:** "Should selecting an already-mapped target automatically switch the destination source row?"
+> **Domain expert:** "No. The **Active Target Owner** is shown for inspection and may be explicitly used as the **Destination Source Row**, but it does not switch automatically."
+
+> **Dev:** "Does a duplicate target mean many-to-one mapping is supported?"
+> **Domain expert:** "No. **Duplicate Target Assignment** is a health-report problem state; normal assignment is unique and latest assignment wins."
+
 > **Dev:** "Does Target Calibration prove that the mapping is correct?"
-> **Domain expert:** "No. **Target Calibration** only prepares the currently mapped **Deform Channels**; mapping correctness is judged by live visual feedback."
+> **Domain expert:** "No. **Target Calibration** only performs optional target-side edits or reference refreshes; mapping correctness is judged by live visual feedback."
 
 > **Dev:** "Does every mapping edit require Target Calibration?"
-> **Domain expert:** "No. Mapping edits change live distribution immediately; **Target Calibration** is only needed to synchronize mapped target bones into reliable **Deform Channels**."
+> **Domain expert:** "No. Mapping edits change live distribution immediately. **Target Calibration** is never required for mapping, live preview, or bake; users run it only when they explicitly want Bone Remap to adjust target bones."
 
 > **Dev:** "Does Bone Remap add onto the current target pose?"
 > **Domain expert:** "No. Live retargeting uses **Overwrite Retargeting**: mapped **Deform Channels** are solved from target bind/reference each frame."
@@ -647,5 +952,5 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 
 - "bridge" belongs to the old plugin architecture; resolved: it is not core product language for Bone Remap's first design pass.
 - "target bone" can mean either a semantic animation bone or a Blender bone used for deformation; resolved: use **Deform Channel** when discussing Bone Remap's target-side channels.
-- "B skeleton" can mean either the original hierarchy or the normalized retargeting output; resolved: first-pass Bone Remap works on the **Deform Channel Rig**.
+- "B skeleton" can mean either the original hierarchy or the target-side writable channels; resolved: first-pass Bone Remap treats mapped target bones as **Deform Channels**, while **Target Calibration** remains optional.
 - "static pose" can mean either a current animation frame or the neutral source-side pose; resolved: use **Source Rest Pose** when discussing the starting point for **Work Pose Edit Mode**.
