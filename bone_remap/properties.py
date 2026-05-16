@@ -12,6 +12,8 @@ from bpy.props import (
 )
 from bpy.types import Action, Object, PropertyGroup
 
+from .registration import register_classes, unregister_classes
+
 
 PROFILE_COLLECTION_ATTR = "brm_retarget_profiles"
 ACTIVE_PROFILE_INDEX_ATTR = "brm_active_profile_index"
@@ -19,6 +21,20 @@ ACTIVE_PROFILE_INDEX_ATTR = "brm_active_profile_index"
 
 def poll_armature(_self, obj: Object | None) -> bool:
     return obj is not None and obj.type == "ARMATURE"
+
+
+def poll_mesh(_self, obj: Object | None) -> bool:
+    return obj is not None and obj.type == "MESH"
+
+
+def sync_active_motion_action(self, context) -> None:
+    source = self.source_armature
+    if source is None or source.type != "ARMATURE":
+        return
+
+    source.animation_data_create().action = self.active_motion_action
+    if context is not None:
+        context.view_layer.update()
 
 
 class BRM_WorkPoseBoneMatrix(PropertyGroup):
@@ -114,6 +130,17 @@ class BRM_LiveWrittenTarget(PropertyGroup):
     target_bone_name: StringProperty(name="Target Bone")
 
 
+class BRM_AutoMatchMeshReference(PropertyGroup):
+    """One mesh object included in Auto Match Mesh Scope."""
+
+    mesh: PointerProperty(
+        name="Mesh",
+        description="Mesh object used by Auto Match Visible Meshes",
+        type=Object,
+        poll=poll_mesh,
+    )
+
+
 class BRM_MappingRow(PropertyGroup):
     """Source-first mapping row that owns one or more target links."""
 
@@ -160,6 +187,8 @@ class BRM_RetargetProfile(PropertyGroup):
     input_compensations: CollectionProperty(type=BRM_InputCompensationTransform)
     classification_overrides: CollectionProperty(type=BRM_ClassificationOverride)
     classification_report: CollectionProperty(type=BRM_ClassificationReportItem)
+    auto_match_source_meshes: CollectionProperty(type=BRM_AutoMatchMeshReference)
+    auto_match_target_meshes: CollectionProperty(type=BRM_AutoMatchMeshReference)
     mapping_rows: CollectionProperty(type=BRM_MappingRow)
     active_mapping_row_index: IntProperty(
         name="Destination Source Row",
@@ -188,6 +217,7 @@ class BRM_RetargetProfile(PropertyGroup):
         name="Active Motion Action",
         description="Source-side Motion Action used by Motion Edit Mode and Bake defaults",
         type=Action,
+        update=sync_active_motion_action,
     )
     motion_editing: BoolProperty(
         name="Motion Edit Mode",
@@ -219,14 +249,14 @@ _CLASSES = (
     BRM_TargetLink,
     BRM_TargetBindMatrix,
     BRM_LiveWrittenTarget,
+    BRM_AutoMatchMeshReference,
     BRM_MappingRow,
     BRM_RetargetProfile,
 )
 
 
 def register():
-    for cls in _CLASSES:
-        bpy.utils.register_class(cls)
+    register_classes(_CLASSES)
 
     setattr(
         bpy.types.Scene,
@@ -250,5 +280,4 @@ def unregister():
     if hasattr(bpy.types.Scene, PROFILE_COLLECTION_ATTR):
         delattr(bpy.types.Scene, PROFILE_COLLECTION_ATTR)
 
-    for cls in reversed(_CLASSES):
-        bpy.utils.unregister_class(cls)
+    unregister_classes(_CLASSES)

@@ -5,7 +5,8 @@ from __future__ import annotations
 import bpy
 from bpy.types import Object, Operator
 
-from . import runtime_plan, state
+from . import runtime_plan, state, weighted_geometry
+from .registration import register_classes, unregister_classes
 
 
 def get_active_mapping_row(profile):
@@ -34,6 +35,14 @@ def find_owner_row(profile, target_bone_name: str):
         if any(link.target_bone_name == target_bone_name for link in row.target_links):
             return index, row
     return -1, None
+
+
+def row_target_bone_names(row) -> list[str]:
+    return [
+        link.target_bone_name
+        for link in row.target_links
+        if link.target_bone_name
+    ]
 
 
 def ensure_mapping_row(profile, source_bone_name: str):
@@ -99,6 +108,17 @@ def selected_bone_names(context, armature: Object) -> list[str]:
     return _unique_names(names)
 
 
+def weighted_source_bone_names(scene, source_armature: Object) -> list[str]:
+    meshes = weighted_geometry.bound_meshes(scene, source_armature)
+    regions = weighted_geometry.weighted_regions(meshes, source_armature)
+    region_names = {region.bone_name for region in regions}
+    return [
+        bone.name
+        for bone in source_armature.data.bones
+        if bone.name in region_names
+    ]
+
+
 def active_or_selected_bone_name(context, armature: Object) -> str | None:
     if context.object == armature and context.mode == "POSE":
         active_pose_bone = getattr(context, "active_pose_bone", None)
@@ -107,6 +127,63 @@ def active_or_selected_bone_name(context, armature: Object) -> str | None:
 
     selected = selected_bone_names(context, armature)
     return selected[0] if selected else None
+
+
+def activate_armature_and_select_pose_bones(
+    context,
+    armature: Object,
+    bone_names: list[str] | tuple[str, ...],
+    replace_selection: bool = True,
+) -> int:
+    if not _is_armature(armature):
+        return 0
+
+    wanted_bone_names = [bone_name for bone_name in bone_names if bone_name in armature.pose.bones]
+    if context.mode not in {"OBJECT", "POSE"}:
+        try:
+            bpy.ops.object.mode_set(mode="OBJECT")
+        except RuntimeError:
+            return 0
+
+    if replace_selection or context.view_layer.objects.active != armature:
+        for selected_object in context.selected_objects:
+            selected_object.select_set(False)
+
+    armature.hide_set(False)
+    armature.hide_viewport = False
+    armature.hide_select = False
+    armature.select_set(True)
+    context.view_layer.objects.active = armature
+
+    try:
+        if context.mode != "POSE" or context.view_layer.objects.active != armature:
+            bpy.ops.object.mode_set(mode="POSE")
+    except RuntimeError:
+        return 0
+
+    if replace_selection:
+        try:
+            bpy.ops.pose.select_all(action="DESELECT")
+        except RuntimeError:
+            for pose_bone in armature.pose.bones:
+                pose_bone.select = False
+
+    active_data_bone = None
+    selected_count = 0
+    for bone_name in wanted_bone_names:
+        pose_bone = armature.pose.bones.get(bone_name)
+        if pose_bone is None:
+            continue
+        pose_bone.select = True
+        selected_count += 1
+        if active_data_bone is None:
+            active_data_bone = pose_bone.bone
+
+    if active_data_bone is not None:
+        armature.data.bones.active = active_data_bone
+
+    context.view_layer.update()
+    return selected_count
 
 
 def _remove_target_from_row(row, target_bone_name: str) -> None:
@@ -201,6 +278,38 @@ class BRM_OT_mapping_add_source_rows(Operator):
         return {"FINISHED"}
 
 
+class BRM_OT_mapping_add_weighted_source_rows(Operator):
+    bl_idname = "bone_remap.mapping_add_weighted_source_rows"
+    bl_label = "Add Weighted Source Rows"
+    bl_description = "Create Mapping Rows for source bones that have non-zero same-name vertex group weights on bound source meshes"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        profile, source, error = _active_profile_source(context)
+        if error is not None:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+
+        source_meshes = weighted_geometry.bound_meshes(context.scene, source)
+        if not source_meshes:
+            self.report({"ERROR"}, "No source meshes bound to Source Armature.")
+            return {"CANCELLED"}
+
+        source_bone_names = weighted_source_bone_names(context.scene, source)
+        if not source_bone_names:
+            self.report({"ERROR"}, "No source bones have same-name non-zero vertex group weights.")
+            return {"CANCELLED"}
+
+        created = 0
+        for source_bone_name in source_bone_names:
+            _row, was_created = ensure_mapping_row(profile, source_bone_name)
+            created += int(was_created)
+
+        _solve_live_preview_if_enabled(context, reason="mapping_weighted_source_rows_added")
+        self.report({"INFO"}, f"Added {created} weighted source rows; found {len(source_bone_names)} weighted source bones.")
+        return {"FINISHED"}
+
+
 class BRM_OT_mapping_remove_active_source_row(Operator):
     bl_idname = "bone_remap.mapping_remove_active_source_row"
     bl_label = "Remove Source Row"
@@ -227,6 +336,58 @@ class BRM_OT_mapping_remove_active_source_row(Operator):
         cleanup_count = _cleanup_removed_targets(context, profile, target, removed_targets)
         _solve_live_preview_if_enabled(context, reason="mapping_source_row_removed")
         self.report({"INFO"}, f"Removed {source_bone_name}; cleaned {cleanup_count} target channels.")
+        return {"FINISHED"}
+
+
+class BRM_OT_mapping_activate_source_row(Operator):
+    bl_idname = "bone_remap.mapping_activate_source_row"
+    bl_label = "Activate Source Row"
+    bl_description = "Make this source row the mapping destination and highlight its target bones"
+    bl_options = {"INTERNAL"}
+
+    mapping_index: bpy.props.IntProperty(name="Mapping Index", default=-1)
+
+    def execute(self, context):
+        profile, _source, target, error = _active_profile_pair(context)
+        if error is not None:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+        if self.mapping_index < 0 or self.mapping_index >= len(profile.mapping_rows):
+            return {"CANCELLED"}
+
+        set_active_mapping_row_index(profile, self.mapping_index)
+        row = profile.mapping_rows[self.mapping_index]
+        selected_count = activate_armature_and_select_pose_bones(context, target, row_target_bone_names(row))
+        self.report({"INFO"}, f"{row.source_bone_name}: highlighted {selected_count} target bones.")
+        return {"FINISHED"}
+
+
+class BRM_OT_mapping_activate_target_link(Operator):
+    bl_idname = "bone_remap.mapping_activate_target_link"
+    bl_label = "Activate Target Link"
+    bl_description = "Make this target link active and highlight its target bone"
+    bl_options = {"INTERNAL"}
+
+    target_link_index: bpy.props.IntProperty(name="Target Link Index", default=-1)
+
+    def execute(self, context):
+        profile, _source, target, error = _active_profile_pair(context)
+        if error is not None:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+
+        row = get_active_mapping_row(profile)
+        if row is None:
+            return {"CANCELLED"}
+        if self.target_link_index < 0 or self.target_link_index >= len(row.target_links):
+            return {"CANCELLED"}
+
+        row.active_target_link_index = self.target_link_index
+        target_bone_name = row.target_links[self.target_link_index].target_bone_name
+        selected_count = activate_armature_and_select_pose_bones(context, target, [target_bone_name])
+        if selected_count <= 0:
+            self.report({"ERROR"}, f"Invalid target bone: {target_bone_name}")
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -375,6 +536,10 @@ class BRM_OT_mapping_use_revealed_owner_as_destination(Operator):
             return {"CANCELLED"}
 
         set_active_mapping_row_index(profile, index)
+        active_context = state.get_active_profile_context(context.scene)
+        if active_context is not None:
+            row = profile.mapping_rows[index]
+            activate_armature_and_select_pose_bones(context, active_context.target_armature, row_target_bone_names(row))
         self.report({"INFO"}, f"Destination Source Row set to {source_bone_name}.")
         return {"FINISHED"}
 
@@ -403,7 +568,10 @@ class BRM_OT_mapping_report_health(Operator):
 
 _CLASSES = (
     BRM_OT_mapping_add_source_rows,
+    BRM_OT_mapping_add_weighted_source_rows,
     BRM_OT_mapping_remove_active_source_row,
+    BRM_OT_mapping_activate_source_row,
+    BRM_OT_mapping_activate_target_link,
     BRM_OT_mapping_assign_selected_targets,
     BRM_OT_mapping_remove_active_target_link,
     BRM_OT_mapping_unassign_selected_targets,
@@ -414,13 +582,11 @@ _CLASSES = (
 
 
 def register():
-    for cls in _CLASSES:
-        bpy.utils.register_class(cls)
+    register_classes(_CLASSES)
 
 
 def unregister():
-    for cls in reversed(_CLASSES):
-        bpy.utils.unregister_class(cls)
+    unregister_classes(_CLASSES)
 
 
 def _solve_live_preview_if_enabled(context, reason: str) -> None:

@@ -7,7 +7,8 @@ from bpy.props import EnumProperty
 from bpy.types import NlaTrack, Object, Operator
 from mathutils import Matrix
 
-from . import state
+from . import pose_matrices, state
+from .registration import register_classes, unregister_classes
 
 
 @dataclass
@@ -26,13 +27,13 @@ def has_saved_work_pose(profile) -> bool:
 
 
 def capture_work_pose(context, profile, source_armature: Object) -> int:
-    """Store evaluated Work Pose matrices for all visible source pose bones."""
+    """Store evaluated Work Pose matrices for all source pose bones."""
 
     context.view_layer.update()
     evaluated_source = source_armature.evaluated_get(context.evaluated_depsgraph_get())
 
     profile.work_pose_matrices.clear()
-    for pose_bone in _iter_visible_pose_bones(evaluated_source):
+    for pose_bone in evaluated_source.pose.bones:
         item = profile.work_pose_matrices.add()
         item.bone_name = pose_bone.name
         item.matrix = flatten_matrix(pose_bone.matrix)
@@ -46,7 +47,7 @@ def apply_saved_work_pose(context, profile, source_armature: Object) -> int:
 
     reset_source_pose_to_rest(context, source_armature)
     matrix_by_bone_name = profile_work_pose_matrix_map(profile)
-    return apply_pose_matrix_map(context, source_armature, matrix_by_bone_name)
+    return pose_matrices.apply_pose_matrix_map(context, source_armature, matrix_by_bone_name)
 
 
 def reset_source_pose_to_rest(context, source_armature: Object) -> None:
@@ -140,7 +141,7 @@ def _apply_pose_matrices(context, source_armature: Object, matrices: dict[str, t
         bone_name: matrix_from_flat(matrix)
         for bone_name, matrix in matrices.items()
     }
-    apply_pose_matrix_map(context, source_armature, matrix_by_bone_name)
+    pose_matrices.apply_pose_matrix_map(context, source_armature, matrix_by_bone_name)
 
 
 def _classify_work_pose_changes(profile, source_armature: Object, snapshot_matrices: dict[str, tuple[float, ...]]) -> None:
@@ -222,68 +223,12 @@ def _source_solver_input_bone_names(source_armature: Object) -> set[str]:
     return names
 
 
-def _iter_visible_pose_bones(source_armature: Object):
-    for pose_bone in source_armature.pose.bones:
-        if getattr(pose_bone.bone, "hide", False):
-            continue
-        yield pose_bone
-
-
 def profile_work_pose_matrix_map(profile) -> dict[str, Matrix]:
     return {
         item.bone_name: matrix_from_flat(item.matrix)
         for item in profile.work_pose_matrices
         if item.bone_name
     }
-
-
-def basis_matrix_map_from_pose_matrices(source_armature: Object, pose_matrix_map: dict[str, Matrix]) -> dict[str, Matrix]:
-    basis_matrix_map = {}
-    for data_bone in _iter_data_bones_depth_first(source_armature):
-        pose_matrix = pose_matrix_map.get(data_bone.name)
-        if pose_matrix is None:
-            continue
-
-        kwargs = {}
-        if data_bone.parent is not None:
-            kwargs["parent_matrix"] = pose_matrix_map.get(
-                data_bone.parent.name,
-                data_bone.parent.matrix_local.copy(),
-            )
-            kwargs["parent_matrix_local"] = data_bone.parent.matrix_local.copy()
-
-        basis_matrix_map[data_bone.name] = data_bone.convert_local_to_pose(
-            pose_matrix,
-            data_bone.matrix_local.copy(),
-            invert=True,
-            **kwargs,
-        )
-    return basis_matrix_map
-
-
-def apply_pose_matrix_map(context, source_armature: Object, pose_matrix_map: dict[str, Matrix]) -> int:
-    basis_matrix_map = basis_matrix_map_from_pose_matrices(source_armature, pose_matrix_map)
-    applied = 0
-    for data_bone in _iter_data_bones_depth_first(source_armature):
-        pose_bone = source_armature.pose.bones.get(data_bone.name)
-        basis_matrix = basis_matrix_map.get(data_bone.name)
-        if pose_bone is not None and basis_matrix is not None:
-            pose_bone.matrix_basis = basis_matrix
-            applied += 1
-    context.view_layer.update()
-    return applied
-
-
-def _iter_data_bones_depth_first(source_armature: Object):
-    for data_bone in source_armature.data.bones:
-        if data_bone.parent is None:
-            yield from _walk_data_bone_tree(data_bone)
-
-
-def _walk_data_bone_tree(data_bone):
-    yield data_bone
-    for child_bone in data_bone.children:
-        yield from _walk_data_bone_tree(child_bone)
 
 
 def flatten_matrix(matrix: Matrix) -> tuple[float, ...]:
@@ -382,12 +327,13 @@ class BRM_OT_work_pose_save(Operator):
         _finish_edit_session(context, profile, source, restore_pose=False)
         layered = _ensure_work_pose_layer(context, profile, source)
         reset_source_pose_to_rest(context, source)
+        context.scene.frame_set(context.scene.frame_current)
         _solve_live_preview_if_enabled(context, reason="work_pose_saved")
         input_count, output_count, ambiguous_count = classification_summary(profile)
         self.report(
             {"INFO"},
             (
-                f"Saved Work Pose matrices for {count} visible source bones; "
+                f"Saved Work Pose matrices for {count} source bones; "
                 f"layered {layered}; "
                 f"classified {input_count} input, {output_count} output, {ambiguous_count} ambiguous."
             ),
@@ -550,12 +496,10 @@ _CLASSES = (
 
 
 def register():
-    for cls in _CLASSES:
-        bpy.utils.register_class(cls)
+    register_classes(_CLASSES)
 
 
 def unregister():
-    for cls in reversed(_CLASSES):
-        bpy.utils.unregister_class(cls)
+    unregister_classes(_CLASSES)
 
     _EDIT_SESSIONS.clear()

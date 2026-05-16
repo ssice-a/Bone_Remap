@@ -5,8 +5,9 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel, UIList
 
-from . import mapping, state, work_pose
+from . import mapping, state
 from .properties import ACTIVE_PROFILE_INDEX_ATTR, PROFILE_COLLECTION_ATTR
+from .registration import register_classes, unregister_classes
 
 
 def _validation_icon(severity: str) -> str:
@@ -31,10 +32,16 @@ class BRM_UL_retarget_profiles(UIList):
 class BRM_UL_mapping_rows(UIList):
     bl_idname = "BRM_UL_mapping_rows"
 
-    def draw_item(self, _context, layout, _data, item, icon, _active_data, _active_propname, _index):
+    def draw_item(self, _context, layout, _data, item, icon, _active_data, _active_propname, index):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             row = layout.row(align=True)
-            row.prop(item, "source_bone_name", text="", emboss=False, icon_value=icon)
+            op = row.operator(
+                "bone_remap.mapping_activate_source_row",
+                text=item.source_bone_name or "Unnamed Source",
+                emboss=False,
+                icon="BONE_DATA",
+            )
+            op.mapping_index = index
             row.label(text=str(len(item.target_links)), icon="LINKED")
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
@@ -44,9 +51,15 @@ class BRM_UL_mapping_rows(UIList):
 class BRM_UL_target_links(UIList):
     bl_idname = "BRM_UL_target_links"
 
-    def draw_item(self, _context, layout, _data, item, icon, _active_data, _active_propname, _index):
+    def draw_item(self, _context, layout, _data, item, icon, _active_data, _active_propname, index):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
-            layout.prop(item, "target_bone_name", text="", emboss=False, icon_value=icon)
+            op = layout.operator(
+                "bone_remap.mapping_activate_target_link",
+                text=item.target_bone_name or "Unnamed Target",
+                emboss=False,
+                icon="BONE_DATA",
+            )
+            op.target_link_index = index
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
             layout.label(text="", icon_value=icon)
@@ -90,44 +103,47 @@ class BRM_PT_retarget_workbench(Panel):
         box.prop(profile, "target_armature")
         box.operator("bone_remap.set_target_from_active", icon="ARMATURE_DATA")
 
+        solve_box = layout.box()
+        solve_row = solve_box.row(align=True)
+        solve_row.scale_y = 1.25
+        solve_row.operator(
+            "bone_remap.live_preview_toggle",
+            text="Solve",
+            icon="PLAY",
+            depress=profile.live_preview_enabled,
+        )
+        if profile.live_preview_last_result and not profile.live_preview_enabled:
+            solve_box.label(text=profile.live_preview_last_result, icon="INFO")
+
         work_pose_box = layout.box()
-        work_pose_box.label(text="Work Pose")
-        status_text = "Editing" if profile.work_pose_editing else "Saved" if profile.work_pose_saved else "Not Saved"
-        status_icon = "GREASEPENCIL" if profile.work_pose_editing else "CHECKMARK" if profile.work_pose_saved else "INFO"
-        work_pose_box.label(
-            text=f"{status_text} ({len(profile.work_pose_matrices)} bones)",
-            icon=status_icon,
+        work_pose_box.label(text="Work Pose", icon="ARMATURE_DATA")
+        row = work_pose_box.row(align=True)
+        row.operator(
+            "bone_remap.work_pose_enter",
+            text="Edit",
+            icon="GREASEPENCIL",
+            depress=profile.work_pose_editing,
         )
-        layer_action = profile.work_pose_action.name if profile.work_pose_action is not None else "None"
-        work_pose_box.label(text=f"Layer: {layer_action}", icon="ACTION")
-
-        row = work_pose_box.row(align=True)
-        row.operator("bone_remap.work_pose_enter", icon="ARMATURE_DATA")
-        row.operator("bone_remap.work_pose_save", icon="CHECKMARK")
-
-        row = work_pose_box.row(align=True)
-        row.operator("bone_remap.work_pose_cancel", icon="CANCEL")
-        row.operator("bone_remap.work_pose_reset_to_rest")
-        input_count, output_count, ambiguous_count = work_pose.classification_summary(profile)
-        work_pose_box.label(
-            text=f"Classification: {input_count} input / {output_count} output / {ambiguous_count} ambiguous",
-            icon="INFO",
-        )
-        for index, item in enumerate(profile.classification_report):
-            if index >= 5:
-                break
-            work_pose_box.label(text=f"{item.bone_name}: {item.classification}", icon=_validation_icon("WARNING" if item.classification == "AMBIGUOUS_OUTPUT" else "INFO"))
-        if len(profile.classification_report) > 5:
-            work_pose_box.label(text=f"{len(profile.classification_report) - 5} more classifications", icon="INFO")
-        row = work_pose_box.row(align=True)
-        op = row.operator("bone_remap.classification_override_set", text="Override Input")
-        op.classification = "INPUT"
-        op = row.operator("bone_remap.classification_override_set", text="Override Output")
-        op.classification = "OUTPUT"
-        work_pose_box.operator("bone_remap.classification_override_clear", icon="X")
+        row.operator("bone_remap.work_pose_save", text="Save", icon="CHECKMARK")
+        row.operator("bone_remap.work_pose_cancel", text="Cancel", icon="CANCEL")
+        row.operator("bone_remap.work_pose_reset_to_rest", text="Reset", icon="TRASH")
 
         mapping_box = layout.box()
         mapping_box.label(text="Mapping Table")
+        row = mapping_box.row(align=True)
+        row.operator("bone_remap.mapping_add_weighted_source_rows", icon="GROUP_VERTEX")
+        row.operator("bone_remap.auto_match_visible_meshes", text="Auto Match", icon="MOD_VERTEX_WEIGHT")
+
+        scope_row = mapping_box.row(align=True)
+        scope_row.label(
+            text=f"Auto Match Meshes: S {len(profile.auto_match_source_meshes)} / T {len(profile.auto_match_target_meshes)}",
+            icon="MESH_DATA",
+        )
+        scope_buttons = mapping_box.row(align=True)
+        scope_buttons.operator("bone_remap.auto_match_add_selected_source_meshes", text="Add Src", icon="ADD")
+        scope_buttons.operator("bone_remap.auto_match_add_selected_target_meshes", text="Add Tgt", icon="ADD")
+        scope_buttons.operator("bone_remap.auto_match_add_bound_meshes", text="Bound", icon="LINKED")
+        scope_buttons.operator("bone_remap.auto_match_clear_mesh_scope", text="", icon="TRASH")
 
         row = mapping_box.row()
         row.template_list(
@@ -144,11 +160,22 @@ class BRM_PT_retarget_workbench(Panel):
         buttons.operator("bone_remap.mapping_add_source_rows", text="", icon="ADD")
         buttons.operator("bone_remap.mapping_remove_active_source_row", text="", icon="REMOVE")
 
+        link_count = sum(len(row.target_links) for row in profile.mapping_rows)
+        health_messages = mapping.mapping_health_messages(profile, profile.source_armature, profile.target_armature)
+        issue_count = sum(1 for message in health_messages if message.severity in {"ERROR", "WARNING"})
+        mapping_box.label(
+            text=f"{len(profile.mapping_rows)} sources / {link_count} targets / {issue_count} issues",
+            icon="INFO" if issue_count else "CHECKMARK",
+        )
+
         active_row = mapping.get_active_mapping_row(profile)
         if active_row is None:
             mapping_box.label(text="No Destination Source Row", icon="INFO")
         else:
-            mapping_box.label(text=f"Destination: {active_row.source_bone_name}", icon="FORWARD")
+            mapping_box.label(
+                text=f"{active_row.source_bone_name} -> {len(active_row.target_links)} targets",
+                icon="FORWARD",
+            )
             mapping_box.template_list(
                 BRM_UL_target_links.bl_idname,
                 "",
@@ -166,49 +193,28 @@ class BRM_PT_retarget_workbench(Panel):
         row = mapping_box.row(align=True)
         row.operator("bone_remap.mapping_reveal_active_target_owner", icon="VIEWZOOM")
 
-        revealed_target = profile.revealed_target_bone_name or "None"
-        revealed_owner = profile.revealed_owner_source_bone_name or "Unmapped"
-        mapping_box.label(text=f"Active Target Owner: {revealed_target} -> {revealed_owner}")
-        mapping_box.operator("bone_remap.mapping_use_revealed_owner_as_destination", icon="FORWARD")
-
-        health_box = layout.box()
-        health_box.label(text="Mapping Health")
-        health_messages = mapping.mapping_health_messages(profile, profile.source_armature, profile.target_armature)
-        for message in health_messages[:6]:
-            health_box.label(text=message.text, icon=_validation_icon(message.severity))
-        if len(health_messages) > 6:
-            health_box.label(text=f"{len(health_messages) - 6} more issues", icon="INFO")
-        health_box.operator("bone_remap.mapping_report_health", icon="INFO")
-        mapping_box.operator("bone_remap.auto_map_from_work_pose", icon="MOD_VERTEX_WEIGHT")
-
-        solve_box = layout.box()
-        solve_box.label(text="One Frame Solve")
-        solve_box.operator("bone_remap.solve_one_frame", icon="PLAY")
-
-        live_box = layout.box()
-        live_box.label(text="Live Preview")
-        live_status = "Enabled" if profile.live_preview_enabled else "Disabled"
-        live_icon = "PLAY" if profile.live_preview_enabled else "PAUSE"
-        live_box.label(
-            text=f"{live_status} ({len(profile.live_preview_last_written_targets)} last targets)",
-            icon=live_icon,
-        )
-        row = live_box.row(align=True)
-        row.operator("bone_remap.live_preview_enable", icon="PLAY")
-        row.operator("bone_remap.live_preview_disable", icon="PAUSE")
-        live_box.operator("bone_remap.live_preview_clear", icon="CANCEL")
-        if profile.live_preview_last_result:
-            live_box.label(text=profile.live_preview_last_result, icon="INFO")
+        if profile.revealed_target_bone_name:
+            revealed_owner = profile.revealed_owner_source_bone_name or "Unmapped"
+            mapping_box.label(text=f"{profile.revealed_target_bone_name} -> {revealed_owner}", icon="VIEWZOOM")
+            if profile.revealed_owner_source_bone_name:
+                mapping_box.operator("bone_remap.mapping_use_revealed_owner_as_destination", icon="FORWARD")
+        if issue_count:
+            for message in health_messages[:3]:
+                if message.severity in {"ERROR", "WARNING"}:
+                    mapping_box.label(text=message.text, icon=_validation_icon(message.severity))
+            mapping_box.operator("bone_remap.mapping_report_health", icon="INFO")
 
         motion_box = layout.box()
-        motion_box.label(text="Motion Edit")
-        motion_status = "Editing" if profile.motion_editing else "Inactive"
-        motion_action = profile.active_motion_action.name if profile.active_motion_action is not None else "None"
-        motion_box.label(text=f"{motion_status}: {motion_action}", icon="ACTION")
+        motion_box.label(text="Motion Action", icon="ACTION")
         row = motion_box.row(align=True)
-        row.operator("bone_remap.motion_edit_enter", icon="GREASEPENCIL")
-        row.operator("bone_remap.motion_edit_exit", icon="CANCEL")
-        motion_box.operator("bone_remap.motion_action_duplicate", icon="DUPLICATE")
+        row.prop_search(profile, "active_motion_action", context.blend_data, "actions", text="")
+        row.operator("bone_remap.motion_action_duplicate", text="", icon="DUPLICATE")
+        motion_box.operator(
+            "bone_remap.motion_edit_toggle",
+            text="Edit Motion",
+            icon="GREASEPENCIL",
+            depress=profile.motion_editing,
+        )
 
         bake_box = layout.box()
         bake_box.label(text="Bake")
@@ -234,11 +240,12 @@ class BRM_PT_retarget_workbench(Panel):
         calibration_box.operator("bone_remap.target_bind_refresh", icon="CHECKMARK")
         calibration_box.label(text=f"Stored target binds: {len(profile.target_bind_matrices)}", icon="INFO")
 
-        validation_box = layout.box()
-        validation_box.label(text="Profile Validation")
-        for message in state.validate_profile(profile):
-            validation_box.label(text=message.text, icon=_validation_icon(message.severity))
-        validation_box.operator("bone_remap.report_active_profile", icon="INFO")
+        profile_errors = [message for message in state.validate_profile(profile) if message.severity == "ERROR"]
+        if profile_errors:
+            validation_box = layout.box()
+            validation_box.label(text="Profile Errors", icon="ERROR")
+            for message in profile_errors:
+                validation_box.label(text=message.text, icon="ERROR")
 
 
 _CLASSES = (
@@ -250,10 +257,8 @@ _CLASSES = (
 
 
 def register():
-    for cls in _CLASSES:
-        bpy.utils.register_class(cls)
+    register_classes(_CLASSES)
 
 
 def unregister():
-    for cls in reversed(_CLASSES):
-        bpy.utils.unregister_class(cls)
+    unregister_classes(_CLASSES)

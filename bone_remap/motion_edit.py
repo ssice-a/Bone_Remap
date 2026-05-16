@@ -6,6 +6,7 @@ import bpy
 from bpy.types import Object, Operator
 
 from . import live_preview, state, work_pose, work_pose_layer
+from .registration import register_classes, unregister_classes
 
 
 def ensure_motion_action(profile, source_armature: Object):
@@ -49,6 +50,21 @@ def _activate_source_pose_mode(context, source_armature: Object) -> None:
     bpy.ops.object.mode_set(mode="POSE")
 
 
+def _enter_motion_edit(context, profile, source_armature: Object):
+    if work_pose.has_saved_work_pose(profile):
+        work_pose_layer.ensure_work_pose_layer(context, profile, source_armature)
+    action = ensure_motion_action(profile, source_armature)
+    profile.motion_editing = True
+    profile.live_preview_enabled = True
+    _activate_source_pose_mode(context, source_armature)
+    live_preview.solve_if_enabled(context, reason="motion_edit_enter")
+    return action
+
+
+def _exit_motion_edit(profile) -> None:
+    profile.motion_editing = False
+
+
 class BRM_OT_motion_edit_enter(Operator):
     bl_idname = "bone_remap.motion_edit_enter"
     bl_label = "Enter Motion Edit Mode"
@@ -61,13 +77,7 @@ class BRM_OT_motion_edit_enter(Operator):
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
 
-        if work_pose.has_saved_work_pose(profile):
-            work_pose_layer.ensure_work_pose_layer(context, profile, source)
-        action = ensure_motion_action(profile, source)
-        profile.motion_editing = True
-        profile.live_preview_enabled = True
-        _activate_source_pose_mode(context, source)
-        live_preview.solve_if_enabled(context, reason="motion_edit_enter")
+        action = _enter_motion_edit(context, profile, source)
         self.report({"INFO"}, f"Motion Edit Mode uses {action.name}.")
         return {"FINISHED"}
 
@@ -84,8 +94,30 @@ class BRM_OT_motion_edit_exit(Operator):
             self.report({"ERROR"}, "No Active Retarget Profile.")
             return {"CANCELLED"}
 
-        profile.motion_editing = False
+        _exit_motion_edit(profile)
         self.report({"INFO"}, "Exited Motion Edit Mode.")
+        return {"FINISHED"}
+
+
+class BRM_OT_motion_edit_toggle(Operator):
+    bl_idname = "bone_remap.motion_edit_toggle"
+    bl_label = "Edit Motion"
+    bl_description = "Toggle Blender-native editing for the active source Motion Action"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        profile, source, error = _active_motion_source(context)
+        if error is not None:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+
+        if profile.motion_editing:
+            _exit_motion_edit(profile)
+            self.report({"INFO"}, "Exited Motion Edit Mode.")
+            return {"FINISHED"}
+
+        action = _enter_motion_edit(context, profile, source)
+        self.report({"INFO"}, f"Motion Edit Mode uses {action.name}.")
         return {"FINISHED"}
 
 
@@ -116,15 +148,14 @@ class BRM_OT_motion_action_duplicate(Operator):
 _CLASSES = (
     BRM_OT_motion_edit_enter,
     BRM_OT_motion_edit_exit,
+    BRM_OT_motion_edit_toggle,
     BRM_OT_motion_action_duplicate,
 )
 
 
 def register():
-    for cls in _CLASSES:
-        bpy.utils.register_class(cls)
+    register_classes(_CLASSES)
 
 
 def unregister():
-    for cls in reversed(_CLASSES):
-        bpy.utils.unregister_class(cls)
+    unregister_classes(_CLASSES)

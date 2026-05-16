@@ -7,6 +7,7 @@ from bpy.types import Operator
 from mathutils import Vector
 
 from . import runtime_plan, state, work_pose
+from .registration import register_classes, unregister_classes
 
 
 def channel_align_active_profile(context) -> tuple[int, str]:
@@ -140,10 +141,8 @@ _CLASSES = (
 
 
 def register():
-    for cls in _CLASSES:
-        bpy.utils.register_class(cls)
+    register_classes(_CLASSES)
 
 
 def unregister():
-    for cls in reversed(_CLASSES):
-        bpy.utils.unregister_class(cls)
+    unregister_classes(_CLASSES)

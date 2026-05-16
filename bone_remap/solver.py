@@ -8,7 +8,8 @@ import bpy
 from bpy.types import Object, Operator
 from mathutils import Matrix
 
-from . import runtime_plan, state
+from . import pose_matrices, runtime_plan, state
+from .registration import register_classes, unregister_classes
 
 
 @dataclass(frozen=True)
@@ -76,17 +77,28 @@ def solve_profile_one_frame(
         for target_channel in row.target_channels:
             target_writes[target_channel.bone_name] = source_delta @ target_channel.bind_matrix
 
-    written_target_names = []
-    for target_bone_name in runtime_plan.target_write_order(target_armature, target_writes):
-        target_pose_bone = target_armature.pose.bones.get(target_bone_name)
-        if target_pose_bone is None:
-            skipped_links += 1
+    written_target_names = [
+        target_bone_name
+        for target_bone_name in runtime_plan.target_write_order(target_armature, target_writes)
+        if target_armature.pose.bones.get(target_bone_name) is not None
+    ]
+    skipped_links += len(target_writes) - len(written_target_names)
+    for target_bone_name in target_writes:
+        if target_armature.pose.bones.get(target_bone_name) is None:
             messages.append(state.ValidationMessage("ERROR", f"Invalid target bone: {target_bone_name}"))
-            continue
-        target_pose_bone.matrix = target_writes[target_bone_name]
-        written_target_names.append(target_bone_name)
 
-    if update_view_layer:
+    valid_target_writes = {
+        target_bone_name: target_writes[target_bone_name]
+        for target_bone_name in written_target_names
+    }
+    if valid_target_writes:
+        pose_matrices.apply_pose_matrix_map(
+            context,
+            target_armature,
+            valid_target_writes,
+            update_view_layer=update_view_layer,
+        )
+    elif update_view_layer:
         context.view_layer.update()
     if not messages:
         messages.append(state.ValidationMessage("INFO", f"Solved {len(written_target_names)} target channels."))
@@ -136,10 +148,8 @@ _CLASSES = (
 
 
 def register():
-    for cls in _CLASSES:
-        bpy.utils.register_class(cls)
+    register_classes(_CLASSES)
 
 
 def unregister():
-    for cls in reversed(_CLASSES):
-        bpy.utils.unregister_class(cls)
+    unregister_classes(_CLASSES)

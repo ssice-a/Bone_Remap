@@ -6,7 +6,7 @@ import bpy
 from bpy.types import Action, NlaTrack, Object
 from mathutils import Matrix
 
-from . import work_pose
+from . import pose_matrices, work_pose
 
 
 ACTION_PREFIX = "BRM_WorkPose"
@@ -64,7 +64,7 @@ def _create_work_pose_action(profile, source_armature: Object) -> Action:
 def _rewrite_work_pose_action(context, profile, source_armature: Object, action: Action) -> None:
     _clear_action(action)
     pose_matrix_map = work_pose.profile_work_pose_matrix_map(profile)
-    basis_matrix_map = work_pose.basis_matrix_map_from_pose_matrices(source_armature, pose_matrix_map)
+    basis_matrix_map = pose_matrices.basis_matrix_map_from_pose_matrices(source_armature, pose_matrix_map)
     animation_data = source_armature.animation_data_create()
     original_action = animation_data.action
     original_pose = _capture_pose_matrices(source_armature)
@@ -107,6 +107,7 @@ def _ensure_nla_strip(animation_data, action: Action, frame_start: int, frame_en
     strip.frame_end = max(frame_end, frame_start + 1)
     strip.action_frame_start = ACTION_FRAME_START
     strip.action_frame_end = ACTION_FRAME_END
+    strip.influence = 1.0
     strip.mute = False
     _set_strip_enum(strip, "blend_type", "COMBINE")
     _set_strip_enum(strip, "extrapolation", "HOLD_FORWARD")
@@ -150,20 +151,8 @@ def _clear_action(action: Action) -> None:
         fcurves.remove(fcurves[0])
 
 
-def _iter_data_bones_depth_first(source_armature: Object):
-    for data_bone in source_armature.data.bones:
-        if data_bone.parent is None:
-            yield from _walk_data_bone_tree(data_bone)
-
-
-def _walk_data_bone_tree(data_bone):
-    yield data_bone
-    for child_bone in data_bone.children:
-        yield from _walk_data_bone_tree(child_bone)
-
-
 def _apply_basis_matrices(source_armature: Object, basis_matrix_map: dict[str, Matrix]) -> None:
-    for data_bone in _iter_data_bones_depth_first(source_armature):
+    for data_bone in pose_matrices.iter_data_bones_depth_first(source_armature):
         pose_bone = source_armature.pose.bones.get(data_bone.name)
         basis_matrix = basis_matrix_map.get(data_bone.name)
         if pose_bone is not None and basis_matrix is not None:
@@ -197,4 +186,4 @@ def _restore_pose_matrices(context, source_armature: Object, matrices: dict[str,
         bone_name: work_pose.matrix_from_flat(matrix)
         for bone_name, matrix in matrices.items()
     }
-    work_pose.apply_pose_matrix_map(context, source_armature, matrix_by_bone_name)
+    pose_matrices.apply_pose_matrix_map(context, source_armature, matrix_by_bone_name)

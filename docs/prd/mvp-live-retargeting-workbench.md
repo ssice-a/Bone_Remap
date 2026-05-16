@@ -73,14 +73,14 @@ The first tracer bullet should prove the core retarget loop before building ever
 46. As an animator, I want Target Calibration to be optional, so that live preview, mapping, and bake do not depend on a target-side preparation button.
 47. As an animator, I want optional Channel Alignment to move B bone heads only when I explicitly ask, so that visual alignment does not become a hidden retarget dependency.
 48. As an animator, I want automatic mapping to be a helper rather than the only mapping workflow, so that I can inspect and correct the result.
-49. As an animator, I want Auto Map From Work Pose to use saved Work Pose and weighted geometry, so that matching is based on calibrated source shape rather than arbitrary target bone directions.
+49. As an animator, I want Auto Match Visible Meshes to compare the visible source and target weighted point clouds, so that mapping setup follows what I see in the viewport rather than arbitrary target bone directions.
 50. As an animator, I want auto mapping to leave unmatched targets visible for manual mapping, so that low-confidence guesses do not hide mistakes.
 
 ## Implementation Decisions
 
 - Build around a single **Active Retarget Profile** as the runtime context for core commands.
 - Store **Source Armature**, **Target Armature**, **Mapping Table**, **Work Pose**, and motion clip list in the **Retarget Profile**.
-- Derive source and target mesh sets from armature modifier bindings; do not store explicit mesh lists in the first design.
+- Store an explicit **Auto Match Mesh Scope** so automatic matching knows which source and target mesh fragments participate.
 - Use **Work Pose** as the source-side control baseline and store full evaluated pose matrices for the full visible Source Armature.
 - Work Pose editing is pose-mode, visible-source editing. The first design does not modify source edit-mode bones.
 - Work Pose saving captures source channel snapshots, runs automatic Work Pose classification, stores input compensation for changed solver inputs, and stores Work Pose matrices for output-side baselines.
@@ -112,8 +112,9 @@ The first tracer bullet should prove the core retarget loop before building ever
 - Retarget Presets identify bones by Blender bone name for the first design.
 - Preset Import replaces the Mapping Table, reports missing bone references, and does not preserve old mappings as fallback.
 - Preset Import runs removed-target cleanup for previously mapped target channels that leave the table.
-- Auto Map From Work Pose is a single command that uses saved Work Pose, discovered weighted source/target geometry, normalized comparison space, and internal score thresholds.
-- Auto mapping writes matched target channels through normal assignment semantics and does not run Target Calibration.
+- Auto Match Visible Meshes compares current visible source/target weighted point clouds from the Auto Match Mesh Scope.
+- Auto Match may pause Live Preview and clear prior Live Matrix Write results before reading target geometry so old mappings do not pollute the match.
+- Auto matching writes matched target channels through normal assignment semantics and does not run Target Calibration.
 
 Major modules for implementation:
 
@@ -125,7 +126,7 @@ Major modules for implementation:
 - **Motion Edit Module**: enters/exits the Blender-native edit/tweak context and ensures manual keying writes to the active Motion Action under Work Pose Layer.
 - **Bake Module**: samples the visible live result and writes a Baked Target Action.
 - **Preset Module**: imports/exports reusable profile data and applies table replacement cleanup.
-- **Auto Mapping Module**: derives weighted regions and proposes mapping assignments from saved Work Pose.
+- **Auto Matching Module**: derives visible weighted point clouds, target seam clusters, and mapping assignments from Auto Match Mesh Scope.
 - **Optional Target Calibration Module**: contains explicit target-side convenience commands such as Channel Alignment and bind refresh.
 
 ## Testing Decisions

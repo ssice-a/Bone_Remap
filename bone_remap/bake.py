@@ -6,6 +6,7 @@ import bpy
 from bpy.types import Operator
 
 from . import live_preview, motion_edit, runtime_plan, state
+from .registration import register_classes, unregister_classes
 
 
 def bake_active_profile(context):
@@ -137,10 +138,8 @@ _CLASSES = (
 
 
 def register():
-    for cls in _CLASSES:
-        bpy.utils.register_class(cls)
+    register_classes(_CLASSES)
 
 
 def unregister():
-    for cls in reversed(_CLASSES):
-        bpy.utils.unregister_class(cls)
+    unregister_classes(_CLASSES)

@@ -2,15 +2,15 @@
 
 Bone Remap stores the current working retarget setup with the active Blender project by default. Reusable presets are explicit import/export records, not the only place where retarget state lives.
 
-Core commands run from the active Retarget Profile, not from transient Blender selection. The profile explicitly owns the source armature, target armature, mapping table, Work Pose, and motion clip list. Optional Target Calibration may leave target-side metadata or reports for inspection, but that metadata is not a required state for core retargeting commands. Source and target mesh sets are derived from the active profile's armature binding relationships instead of being saved as separate profile lists. Selection can help users fill or edit profile data, but it does not decide which objects Work Pose, auto mapping, live retargeting, or bake operate on.
+Core commands run from the active Retarget Profile, not from transient Blender selection. The profile explicitly owns the source armature, target armature, mapping table, Work Pose, motion clip list, and the explicit Auto Match Mesh Scope used by automatic mapping. Optional Target Calibration may leave target-side metadata or reports for inspection, but that metadata is not a required state for core retargeting commands. Selection can help users fill or edit profile data, including adding selected meshes to the Auto Match Mesh Scope, but it does not decide which objects Work Pose, auto mapping, live retargeting, or bake operate on at execution time.
 
 Switching the active Retarget Profile changes which profile future core commands and Live Preview updates use. It does not automatically clear or reset the previous profile's target armature; users clear live preview pose explicitly when they want that cleanup.
 
-For the first design, a mesh belongs to a profile armature's derived mesh set only when it has an Armature modifier targeting that armature and usable vertex-group weight data. Usable vertex-group weight data requires an exact vertex-group-name to bone-name match on the relevant armature and at least one vertex weight greater than `1e-6`. Bone Remap does not infer mesh membership from parenting or object names.
+For automatic mapping, a mesh belongs to the Source Mesh Set or Target Mesh Set when the user has added it to the active profile's Auto Match Mesh Scope. Bound Mesh Discovery can suggest meshes with Armature modifiers targeting the source or target armature, but the saved Auto Match Mesh Scope is the execution input. Usable vertex-group weight data requires an exact vertex-group-name to bone-name match on the relevant armature and at least one vertex weight greater than `1e-6`. Bone Remap does not infer mesh membership from parenting or object names during automatic mapping execution.
 
-If a mesh has multiple Armature modifiers, it belongs to a profile armature's mesh set when any Armature modifier targets that armature. A mesh that is discovered for both the source and target armatures is treated as a profile configuration error.
+If a mesh has multiple Armature modifiers, Bound Mesh Discovery may suggest it for a profile armature when any Armature modifier targets that armature. A mesh that is present in both the source and target mesh sets is treated as a profile configuration error.
 
-Missing discovered meshes do not invalidate the whole Retarget Profile. Commands that require weighted geometry must fail with a clear profile/setup error instead of guessing from selection, parenting, names, or bone transforms.
+An empty Auto Match Mesh Scope does not invalidate the whole Retarget Profile. Commands that require weighted geometry must fail with a clear profile/setup error instead of guessing from selection, parenting, names, or bone transforms.
 
 **Considered Options**
 
@@ -21,8 +21,8 @@ Missing discovered meshes do not invalidate the whole Retarget Profile. Commands
 - Make the active Retarget Profile the runtime context for core commands.
 - Automatically clear the previous profile's live target pose when switching profiles.
 - Leave profile switching as a context change only and make live preview cleanup explicit.
-- Store explicit source and target mesh lists in the Retarget Profile.
-- Derive source and target mesh sets from armature binding relationships.
+- Store explicit source and target mesh lists in the Retarget Profile as Auto Match Mesh Scope.
+- Derive source and target mesh sets from armature binding relationships at execution time.
 - Infer mesh membership from object parenting or names.
 - Require an Armature modifier binding with usable vertex-group weights.
 - Fuzzy-match, repair, or guess vertex-group names during mesh discovery.
@@ -66,11 +66,11 @@ Missing discovered meshes do not invalidate the whole Retarget Profile. Commands
 - Core command behavior is reproducible because it reads explicit profile object references instead of current selection.
 - Switching profiles is non-destructive to visible target poses; cleanup is controlled by explicit Clear Live Preview.
 - Current selection remains useful for convenience actions, but not for deciding the source/target object set used by core retargeting behavior.
-- Users only need to set the source armature and target armature; bound meshes are discovered from those armatures.
-- Mesh membership does not become a second long-lived state that can drift away from Blender's actual armature bindings.
-- Mesh discovery is explicit enough to avoid accidentally including unrelated parented or similarly named objects.
+- Users set the source armature and target armature, then explicitly define the Auto Match Mesh Scope when they want automatic mapping.
+- Mesh membership is visible profile state for Auto Map instead of hidden scene discovery.
+- Bound Mesh Discovery remains useful as a convenience for filling the Auto Match Mesh Scope without making current selection the execution input.
 - Multiple Armature modifiers are tolerated when they still point clearly to the profile armature.
-- Source and target mesh discovery remain disjoint; overlap must be corrected before core commands can rely on the profile.
+- Source and target mesh scope membership remains disjoint; overlap must be corrected before auto mapping can rely on the profile.
 - Workflows that do not need weighted geometry can still use the profile when mesh discovery is empty.
 - Workflows that need weighted geometry do not silently fall back to weaker object or bone heuristics.
 - Unmatched vertex groups are ignored instead of making the whole mesh invalid.

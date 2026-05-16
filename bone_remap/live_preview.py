@@ -6,7 +6,8 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.types import Object, Operator
 
-from . import runtime_plan, solver, state
+from . import pose_matrices, runtime_plan, solver, state
+from .registration import register_classes, unregister_classes
 
 
 _IS_SOLVING = False
@@ -103,17 +104,14 @@ def reset_target_channels_to_bind(
             continue
         target_writes[target_bone_name] = bind_matrix
 
-    written = 0
+    valid_target_writes = {}
     for target_bone_name in runtime_plan.target_write_order(target_armature, target_writes):
-        pose_bone = target_armature.pose.bones.get(target_bone_name)
-        if pose_bone is None:
+        if target_armature.pose.bones.get(target_bone_name) is None:
             messages.append(state.ValidationMessage("ERROR", f"Invalid target bone: {target_bone_name}"))
             continue
-        pose_bone.matrix = target_writes[target_bone_name]
-        written += 1
+        valid_target_writes[target_bone_name] = target_writes[target_bone_name]
 
-    if target_writes:
-        context.view_layer.update()
+    written = pose_matrices.apply_pose_matrix_map(context, target_armature, valid_target_writes)
 
     if not messages:
         messages.append(state.ValidationMessage("INFO", f"Reset {written} target channels to bind/rest."))
@@ -155,10 +153,16 @@ def _depsgraph_update_relevant(scene, depsgraph) -> bool:
     target_data = target.data if target is not None else None
     for update in depsgraph.updates:
         updated_id = update.id
-        if updated_id == source or updated_id == source_data or updated_id == target_data:
+        if _same_id(updated_id, source) or _same_id(updated_id, source_data) or _same_id(updated_id, target_data):
             return True
 
     return False
+
+
+def _same_id(candidate, expected) -> bool:
+    if candidate is None or expected is None:
+        return False
+    return candidate == expected or getattr(candidate, "original", None) == expected
 
 
 @persistent
@@ -177,7 +181,7 @@ def _depsgraph_update_post(scene, depsgraph):
     context = _current_context_for_scene(scene)
     if context is None:
         return
-    solve_if_enabled(context, reason="depsgraph_update", depsgraph=depsgraph, update_view_layer=False)
+    solve_if_enabled(context, reason="depsgraph_update", update_view_layer=False)
 
 
 def _append_once(handler_list, handler) -> None:
@@ -188,6 +192,38 @@ def _append_once(handler_list, handler) -> None:
 def _remove_if_present(handler_list, handler) -> None:
     while handler in handler_list:
         handler_list.remove(handler)
+
+
+def _enable_live_preview(context, profile):
+    profile.live_preview_enabled = True
+    result = solve_now(context, reason="enabled")
+    if _initial_solve_failed(result):
+        profile.live_preview_enabled = False
+    return result
+
+
+def _disable_live_preview(profile) -> None:
+    profile.live_preview_enabled = False
+    profile.live_preview_last_result = "disabled; target pose left unchanged"
+
+
+def _initial_solve_failed(result) -> bool:
+    if result is None:
+        return True
+    return result.written_targets <= 0 or any(message.severity == "ERROR" for message in result.messages)
+
+
+def _report_initial_solve_failure(operator, result) -> None:
+    if result is None:
+        operator.report({"ERROR"}, "Solve did not run.")
+        return
+
+    for message in result.messages:
+        if message.severity == "ERROR":
+            operator.report({"ERROR"}, message.text)
+            return
+
+    operator.report({"WARNING"}, "Solve wrote 0 target channels. Add Target Links to the Mapping Table first.")
 
 
 class BRM_OT_live_preview_enable(Operator):
@@ -202,8 +238,10 @@ class BRM_OT_live_preview_enable(Operator):
             self.report({"ERROR"}, "No Active Retarget Profile.")
             return {"CANCELLED"}
 
-        profile.live_preview_enabled = True
-        result = solve_now(context, reason="enabled")
+        result = _enable_live_preview(context, profile)
+        if _initial_solve_failed(result):
+            _report_initial_solve_failure(self, result)
+            return {"CANCELLED"}
         if result is not None and result.written_targets > 0:
             self.report({"INFO"}, f"Live Preview enabled; wrote {result.written_targets} target channels.")
         else:
@@ -223,9 +261,36 @@ class BRM_OT_live_preview_disable(Operator):
             self.report({"ERROR"}, "No Active Retarget Profile.")
             return {"CANCELLED"}
 
-        profile.live_preview_enabled = False
-        profile.live_preview_last_result = "disabled; target pose left unchanged"
+        _disable_live_preview(profile)
         self.report({"INFO"}, "Live Preview disabled; Target Armature pose left unchanged.")
+        return {"FINISHED"}
+
+
+class BRM_OT_live_preview_toggle(Operator):
+    bl_idname = "bone_remap.live_preview_toggle"
+    bl_label = "Solve"
+    bl_description = "Toggle live retarget solving for the Active Retarget Profile"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        profile = state.get_active_profile(context.scene)
+        if profile is None:
+            self.report({"ERROR"}, "No Active Retarget Profile.")
+            return {"CANCELLED"}
+
+        if profile.live_preview_enabled:
+            _disable_live_preview(profile)
+            self.report({"INFO"}, "Solve disabled; Target Armature pose left unchanged.")
+            return {"FINISHED"}
+
+        result = _enable_live_preview(context, profile)
+        if _initial_solve_failed(result):
+            _report_initial_solve_failure(self, result)
+            return {"CANCELLED"}
+        if result is not None and result.written_targets > 0:
+            self.report({"INFO"}, f"Solve enabled; wrote {result.written_targets} target channels.")
+        else:
+            self.report({"INFO"}, "Solve enabled.")
         return {"FINISHED"}
 
 
@@ -260,13 +325,13 @@ class BRM_OT_live_preview_clear(Operator):
 _CLASSES = (
     BRM_OT_live_preview_enable,
     BRM_OT_live_preview_disable,
+    BRM_OT_live_preview_toggle,
     BRM_OT_live_preview_clear,
 )
 
 
 def register():
-    for cls in _CLASSES:
-        bpy.utils.register_class(cls)
+    register_classes(_CLASSES)
 
     _append_once(bpy.app.handlers.frame_change_post, _frame_change_post)
     _append_once(bpy.app.handlers.depsgraph_update_post, _depsgraph_update_post)
@@ -276,5 +341,4 @@ def unregister():
     _remove_if_present(bpy.app.handlers.depsgraph_update_post, _depsgraph_update_post)
     _remove_if_present(bpy.app.handlers.frame_change_post, _frame_change_post)
 
-    for cls in reversed(_CLASSES):
-        bpy.utils.unregister_class(cls)
+    unregister_classes(_CLASSES)

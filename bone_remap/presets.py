@@ -8,6 +8,7 @@ from bpy.types import Operator
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 
 from . import live_preview, mapping, runtime_plan, state, work_pose_layer
+from .registration import register_classes, unregister_classes
 
 
 PRESET_VERSION = 1
@@ -187,10 +188,8 @@ _CLASSES = (
 
 
 def register():
-    for cls in _CLASSES:
-        bpy.utils.register_class(cls)
+    register_classes(_CLASSES)
 
 
 def unregister():
-    for cls in reversed(_CLASSES):
-        bpy.utils.unregister_class(cls)
+    unregister_classes(_CLASSES)

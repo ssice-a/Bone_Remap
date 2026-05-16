@@ -66,11 +66,11 @@ These are proposed tracer-bullet issues. They are not published yet because GitH
     - **User stories covered**: 42, 43, 44, 45
     - **What to build**: Add Retarget Preset import/export using Bone Name References, Missing Bone Reference reports, replacement semantics for Mapping Table import, and cleanup for target channels removed by replacement.
 
-11. **Auto Map From Work Pose Using Weighted Geometry**
+11. **Auto Match Visible Meshes Using Weighted Point Clouds**
     - **Type**: AFK
-    - **Blocked by**: 2, 3, 6
+    - **Blocked by**: 3, 6
     - **User stories covered**: 48, 49, 50
-    - **What to build**: Add the first Auto Map From Work Pose command using Bound Mesh Discovery, weighted source/target regions, normalized comparison space, internal acceptance thresholds, Target Seam Clusters, and normal Target Assignment Operation semantics.
+    - **What to build**: Add the first Auto Match Visible Meshes command using explicit Auto Match Mesh Scope, visible weighted source/target point clouds, target seam clusters, and normal Target Assignment Operation semantics.
 
 12. **Add Optional Target Calibration Commands**
     - **Type**: AFK
@@ -90,5 +90,5 @@ These are proposed tracer-bullet issues. They are not published yet because GitH
 8. Edit Motion Actions Under Work Pose Layer
 9. Bake the Current Live Retargeting Result
 10. Import and Export Retarget Presets
-11. Auto Map From Work Pose Using Weighted Geometry
+11. Auto Match Visible Meshes Using Weighted Point Clouds
 12. Add Optional Target Calibration Commands

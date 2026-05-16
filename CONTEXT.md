@@ -28,6 +28,14 @@ _Avoid_: Rebinding, weight transfer
 The target-side bind/reference matrix read as the base for solving a **Deform Channel** each frame.
 _Avoid_: Hidden target application frame, source pivot copy, live-updated solve output
 
+**Target Hierarchy Neutrality**:
+The user-facing expectation that mapped target **Deform Channels** produce the same visible solved result whether target bones are flat or parented, when the solved transform is expressible by Blender pose channels.
+_Avoid_: Requiring target bone detachment, treating the target parent tree as mapping semantics, assuming shear can always be represented by a flat target bone
+
+**Pose Channel Representability**:
+Whether a **Solved Target Pose Matrix** can be expressed by Blender target pose location, rotation, and scale channels without losing visible matrix information.
+_Avoid_: Assuming every full matrix is keyable losslessly, silently treating shear loss as a mapping error
+
 **Target Bind Refresh**:
 An explicit update of target-side bind/reference matrices after calibration changes the **Deform Channel** rest setup.
 _Avoid_: Retarget solve, source pivot alignment, automatic mapping side effect
@@ -41,16 +49,20 @@ The single **Retarget Profile** currently used as the runtime context for Bone R
 _Avoid_: Blender selection, inferred scene state, temporary object context
 
 **Source Mesh Set**:
-The source-side mesh objects bound to the **Source Armature** and used as weighted source geometry.
-_Avoid_: Manually registered mesh list, currently selected meshes, target meshes
+The explicit source-side mesh objects in the active **Auto Match Mesh Scope** used as weighted source geometry.
+_Avoid_: Currently selected meshes, target meshes, hidden scene-wide discovery
 
 **Target Mesh Set**:
-The target-side mesh objects bound to the **Target Armature** and used as weighted target geometry.
-_Avoid_: Manually registered mesh list, currently selected meshes, source meshes
+The explicit target-side mesh objects in the active **Auto Match Mesh Scope** used as weighted target geometry.
+_Avoid_: Currently selected meshes, source meshes, hidden scene-wide discovery
+
+**Auto Match Mesh Scope**:
+The explicit source mesh object references and target mesh object references used by **Auto Match Visible Meshes**.
+_Avoid_: Transient Blender selection, all bound meshes by default, mapping table, armature pairing, cached point cloud, saved seam cluster, previous match result
 
 **Bound Mesh Discovery**:
-The internal step that derives a **Source Mesh Set** or **Target Mesh Set** from the active profile's armature binding relationships.
-_Avoid_: Saved mesh membership, current selection, arbitrary scene mesh inclusion
+The convenience step that can find mesh objects with **Armature Modifier Binding** so users can add them into an **Auto Match Mesh Scope**.
+_Avoid_: Runtime auto-match input, saved mesh membership replacement, current selection as execution context
 
 **Armature Modifier Binding**:
 A mesh binding relationship where a mesh object has an Armature modifier whose target object is the relevant **Source Armature** or **Target Armature**.
@@ -289,48 +301,80 @@ An explicit project-defined rule that proposes **Mapping Table** entries for use
 _Avoid_: Old bridge auto-build heuristic, mandatory mapping source, invisible mapping decision
 
 **Auto Mapping Source Candidate**:
-A source bone detected by an auto-mapping command because the current **Retarget Profile** has both that source bone and corresponding weighted source mesh influence.
+A source bone detected by automatic matching because the visible source mesh geometry has corresponding weighted source mesh influence.
 _Avoid_: User-managed candidate list, every source bone by default, source control with no mesh influence, hidden helper bone
 
 **Weighted Source Candidate Detection**:
 The internal auto-mapping step that detects source bones with both a real source bone and corresponding weighted source mesh influence.
 _Avoid_: Separate pre-import workflow, add all source bones, name-only source detection, helper-control import
 
-**Auto Map From Work Pose**:
-The single user-facing auto-mapping command that reads the active **Retarget Profile**, requires a saved **Work Pose**, and builds source-to-target **Mapping Table** entries.
-_Avoid_: Rest-pose-only auto mapping, temporary unsaved pose matching, animation-frame matching, target-candidate management workflow
+**Auto Match Visible Meshes**:
+The user-facing automatic matching command that compares the current visible source mesh point clouds against the current visible target mesh point clouds and writes matched source-to-target relationships into the **Mapping Table**.
+_Avoid_: Work Pose-only matching, rest-pose-only matching, bone-transform matching, target-candidate management workflow
 
 **Weighted Source Region**:
-The source-side weighted geometry associated with a detected **Auto Mapping Source Candidate**, evaluated for comparison under the saved **Work Pose**.
-_Avoid_: Source bone transform alone, source bone name alone, target mesh region
+The source-side weighted point cloud associated with a detected **Auto Mapping Source Candidate** in **Auto Match Visible Geometry**.
+_Avoid_: Source bone transform alone, source bone name alone, target mesh region, source-side seam cluster, merged source bones
+
+**Visible Weighted Point Cloud**:
+Point-level weighted mesh geometry sampled from **Auto Match Visible Geometry** for one source candidate, target **Deform Channel**, or **Target Seam Cluster**.
+_Avoid_: Centroid-only region, radius-only region, bone transform proxy, cached previous-run geometry
+
+**Auto Match Visible Geometry**:
+The source and target mesh geometry as evaluated for automatic matching in the user-visible scene state.
+_Avoid_: Rest-only mesh data, hidden bone-transform proxy, stale live retarget output, theoretical bind-only geometry
+
+**Auto Match Visible Space**:
+The shared world-space coordinate space used by automatic matching after evaluated mesh vertices are transformed by their mesh object's current world matrix.
+_Avoid_: Per-region local origin, independent candidate normalization space, armature object-space retarget solve, rest mesh space
+
+**Auto Match Geometry Sampling Adapter**:
+The Blender-facing internal boundary that reads evaluated source and target mesh objects, vertex-group weights, visible mesh state, and object transforms, then outputs **Visible Weighted Point Clouds**.
+_Avoid_: Matching algorithm, Mapping Table writer, persistent cache, hidden scene-wide discovery
+
+**Auto Match Array Core**:
+The Blender-independent matching logic that consumes **Visible Weighted Point Clouds**, builds target **Target Seam Clusters**, computes point-cloud matches, and returns planned **Target Assignment Operations**.
+_Avoid_: `bpy` access, Blender object mutation, UI operator, evaluated mesh reader
+
+**Auto Match Core Test Surface**:
+The Blender-independent test surface for **Auto Match Array Core**, covering target seam clustering, point-cloud compression, spatial-hash nearest lookup, visible-space scoring, and assignment-plan generation.
+_Avoid_: Manual viewport-only validation, UI-first matching verification, tests that require Blender scene state for pure matching math
+
+**Auto Match Assignment Plan**:
+The temporary result produced by **Auto Match Array Core** that lists which target **Deform Channels** should be assigned to which source **Mapping Rows**.
+_Avoid_: Direct Mapping Table mutation, saved preset data, separate auto-map write path, persistent match cache
+
+**Visible-Space Weighted Point-Cloud Score**:
+The first-version auto-match score that compares source and target **Visible Weighted Point Clouds** in **Auto Match Visible Space**.
+_Avoid_: Per-region translation normalization, per-region scale normalization, bone-name fallback, bone-transform fallback, hierarchy fallback, body-part semantic classifier, manual rule cascade
+
+**Bidirectional Weighted Nearest-Point Distance**:
+The concrete distance used by **Visible-Space Weighted Point-Cloud Score**, computed by combining target-to-source and source-to-target weighted nearest-point distances in **Auto Match Visible Space**.
+_Avoid_: One-way containment score, centroid-only distance, equal vertex count assumption, ICP alignment, semantic fallback
+
+**Deterministic Point-Cloud Compression**:
+The repeatable point-cloud reduction step used before scoring, preserving high-weight samples and spatial coverage through visible-space grid representatives.
+_Avoid_: Random sampling, first-N vertex truncation, centroid-only summary, dropping weight peaks, hidden non-deterministic match input
+
+**Visible-Space Spatial Hash**:
+The grid index used by auto matching to find nearby weighted points in **Auto Match Visible Space** without brute-force all-pairs distance checks.
+_Avoid_: Full `N*M` distance matrix, scene-wide object discovery, semantic partition, candidate normalization
 
 **Weighted Target Region**:
-The target-side weighted geometry associated with a target **Deform Channel** or derived **Target Seam Cluster**.
-_Avoid_: Target bone transform alone, target bone name alone, source mesh region
-
-**Auto Mapping Comparison Space**:
-The normalized internal coordinate space used by auto mapping to compare **Weighted Source Regions** and **Weighted Target Regions** after centering and scaling source and target geometry independently.
-_Avoid_: Raw world-space distance, armature-object transform matching, semantic proof
-
-**Auto Mapping Geometry Score**:
-The first-version auto-mapping score based on weighted region proximity, region bounds/overlap, and target seam consistency.
-_Avoid_: Skeleton hierarchy reasoning, target bone direction, IK/FK semantic inference, body-part classifier
-
-**Auto Mapping Acceptance Condition**:
-The internal condition that decides whether an auto-mapping candidate is reliable enough to write into the **Mapping Table**.
-_Avoid_: User-facing score tuning, force-map-every-target behavior, hidden semantic certainty
+The target-side **Visible Weighted Point Cloud** associated with a target **Deform Channel** or derived **Target Seam Cluster**.
+_Avoid_: Target bone transform alone, target bone name alone, source mesh region, live-retarget-contaminated geometry
 
 **Target Seam Cluster**:
-A group of target **Deform Channels** whose weighted vertex groups appear to represent one continuous target-side semantic region across split mesh seams.
-_Avoid_: Merged vertex group, renamed target bone, required one-to-one target bone, first-version user-facing editor concept
+A group of target **Deform Channels** whose weighted vertex groups are joined by duplicate seam vertices with matching positions and matching weights.
+_Avoid_: Merged vertex group, renamed target bone, required one-to-one target bone, first-version user-facing editor concept, name similarity, bone proximity, nearby-but-not-duplicate regions
+
+**Target Seam Aggregation**:
+The auto-mapping step that builds **Target Seam Clusters** from target-side duplicate seam vertices before target geometry is matched against source geometry.
+_Avoid_: Post-match cleanup, user-facing candidate editing, modifying target vertex groups, source-side clustering, skeleton hierarchy reasoning, nearest-region guessing
 
 **Target Geometry Evidence**:
 Target-side weighted vertex positions, seam clusters, point-cloud shape, and weight distribution used by auto mapping.
 _Avoid_: Target bone transform, target animation, source action curve
-
-**Target Bone Transform Evidence**:
-Target-side bone head, tail, axis, or matrix information used only as weak supporting evidence during auto mapping.
-_Avoid_: Primary target identity, required target pivot, reliable target hierarchy
 
 **Target Assignment**:
 The ownership of one **Deform Channel** by one **Target Link**.
@@ -445,15 +489,20 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - Switching the **Active Retarget Profile** does not automatically run **Clear Live Preview** on the previous profile.
 - A **Retarget Profile** belongs to one **Source Armature** and **Target Armature** pairing.
 - A **Retarget Profile** explicitly stores its **Source Armature**, **Target Armature**, **Mapping Table**, **Work Pose**, and motion clip list.
+- A **Retarget Profile** explicitly stores its **Auto Match Mesh Scope** when the user uses automatic mapping.
 - Optional **Target Calibration** may leave target-side metadata or reports for inspection, but that metadata is not a required state for core retargeting commands.
-- A **Retarget Profile** does not store **Source Mesh Set** or **Target Mesh Set** in the first design.
-- **Source Mesh Set** and **Target Mesh Set** are derived through **Bound Mesh Discovery** from the active profile's armatures.
-- **Bound Mesh Discovery** only includes mesh objects with **Armature Modifier Binding** to the relevant armature.
+- **Auto Match Mesh Scope** contains one **Source Mesh Set** and one **Target Mesh Set**.
+- **Auto Match Mesh Scope** stores mesh object membership only.
+- **Auto Match Mesh Scope** does not store point clouds, weighted regions, seam clusters, scores, or match results.
+- **Auto Match Visible Meshes** recomputes point clouds, weighted regions, and **Target Seam Clusters** from current visible mesh geometry each time it runs.
+- Blender selection may add objects to an **Auto Match Mesh Scope**, but selection does not define the scope at execution time.
+- **Bound Mesh Discovery** can help fill an **Auto Match Mesh Scope** from the active profile's armature bindings.
+- **Bound Mesh Discovery** only suggests mesh objects with **Armature Modifier Binding** to the relevant armature.
 - **Bound Mesh Discovery** requires discovered mesh objects to have **Usable Vertex-Group Weight Data**.
 - **Bound Mesh Discovery** does not infer binding from object parent relationships or object names.
-- If a mesh has multiple Armature modifiers, **Bound Mesh Discovery** includes it for an armature when any Armature modifier targets that armature.
+- If a mesh has multiple Armature modifiers, **Bound Mesh Discovery** may suggest it for an armature when any Armature modifier targets that armature.
 - A mesh must not belong to both the **Source Mesh Set** and **Target Mesh Set**; that overlap is a profile configuration error.
-- Missing discovered meshes do not make the whole **Retarget Profile** invalid, but commands that require weighted geometry must fail clearly instead of guessing.
+- An empty **Auto Match Mesh Scope** does not make the whole **Retarget Profile** invalid, but **Auto Match Visible Meshes** must fail clearly instead of guessing.
 - Vertex groups that do not exactly match a bone name on the relevant armature are ignored during mesh discovery and auto mapping.
 - Bone Remap does not fuzzy-match, repair, or guess vertex-group names during first-version **Bound Mesh Discovery**.
 - A **Retarget Profile** is stored as **Project Retarget State** by default.
@@ -499,6 +548,7 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - **Live Retargeting** uses **Live Matrix Write** for mapped **Deform Channels**.
 - **Live Matrix Write** applies the solved full matrix result; it does not author target action channels.
 - **Live Matrix Write** modifies target pose state only; it does not modify target edit-mode bones, target rest data, or **Target Bind Matrix** values.
+- **Target Hierarchy Neutrality** means the target parent-child hierarchy must not change the visible solved result for mapped **Deform Channels** when **Pose Channel Representability** holds.
 - **Bake** converts the current visible target result into keyable action channels after **Live Retargeting** has produced it.
 - **Work Pose** calibration must be visible on the **Source Armature** because those visible **Control Frames** are the pivots users inspect while driving the **Target Armature**.
 - **Work Pose Edit Mode** starts from **Source Rest Pose** when no **Work Pose** has been saved.
@@ -615,47 +665,48 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - **Mapping Health Report** helps diagnose missing or incorrect mappings, but it does not prove semantic mapping correctness.
 - **Auto Mapping Rules** may propose mappings, but the **Mapping Table** remains user-reviewable and editable.
 - Bone Remap does not inherit the old bridge/child-rig auto-build heuristic as its default **Auto Mapping Rule**.
-- New **Auto Mapping Rules** must be designed for direct Source-to-Target **Control Frame** to **Deform Channel** mapping.
-- **Auto Map From Work Pose** is a single command, not a multi-step candidate-management workflow.
-- **Auto Map From Work Pose** reads its source and target objects from the active **Retarget Profile**, not from transient Blender selection.
-- **Auto Map From Work Pose** reads all source meshes and all target meshes derived by **Bound Mesh Discovery** from the active profile's armatures.
-- **Auto Map From Work Pose** fails clearly when **Bound Mesh Discovery** finds no usable **Source Mesh Set** or no usable **Target Mesh Set**.
-- **Auto Map From Work Pose** does not fall back to target bone positions when weighted source or target geometry is unavailable.
-- **Auto Map From Work Pose** detects **Auto Mapping Source Candidates** during the command by using **Weighted Source Candidate Detection**.
-- **Weighted Source Candidate Detection** includes source bones that have both a source bone and corresponding weighted source mesh influence.
-- **Weighted Source Candidate Detection** excludes source bones that have no corresponding weighted source mesh influence.
-- **Weighted Source Candidate Detection** uses **Usable Vertex-Group Weight Data** to decide whether a source bone has weighted source mesh influence.
+- **Auto Match Visible Meshes** reads its **Source Mesh Set** and **Target Mesh Set** from the active profile's **Auto Match Mesh Scope**.
+- **Auto Match Visible Meshes** compares **Auto Match Visible Geometry** from the source and target mesh sets.
+- **Auto Match Visible Meshes** is WYSIWYG: the mesh shapes visible to the user are the shapes used for matching.
+- **Auto Match Visible Meshes** assumes the source and target mesh sets are already approximately aligned in **Auto Match Visible Space**.
+- **Auto Match Visible Meshes** may pause **Live Preview** and clear previous **Live Matrix Write** results before reading target geometry so old mappings do not pollute the match.
+- **Auto Match Visible Meshes** detects **Auto Mapping Source Candidates** from visible source weighted point clouds.
 - Helper, IK, or control-only source bones are not auto-mapping source candidates unless they have source mesh influence.
-- **Auto Map From Work Pose** uses the saved **Work Pose**, not a temporary unsaved source pose, as the source-side comparison pose.
-- **Auto Map From Work Pose** is unavailable until the active **Retarget Profile** has a saved **Work Pose**.
-- **Auto Map From Work Pose** derives its target-side input from target **Deform Channels** with target mesh influence in the active **Retarget Profile**.
-- **Auto Map From Work Pose** does not require or save a separate target candidate list.
-- **Auto Map From Work Pose** matches **Weighted Source Regions** against **Weighted Target Regions**; it does not match source bones to the target mesh by bone transforms alone.
-- **Auto Map From Work Pose** compares regions in **Auto Mapping Comparison Space** rather than raw world space.
-- **Auto Mapping Comparison Space** normalizes source and target geometry independently so size and object-placement differences do not dominate matching.
-- **Auto Mapping Comparison Space** preserves handedness and does not mirror either side by default.
-- First-version **Auto Map From Work Pose** uses **Auto Mapping Geometry Score** for matching.
-- First-version **Auto Map From Work Pose** does not use source/target skeleton hierarchy reasoning, target bone direction, IK/FK semantics, or body-part classification.
-- **Auto Map From Work Pose** only writes candidates that pass the **Auto Mapping Acceptance Condition**.
-- **Auto Map From Work Pose** leaves target **Deform Channels** unmapped when no candidate passes the acceptance condition.
-- **Auto Map From Work Pose** does not force every target **Deform Channel** to match a source.
-- First-version **Auto Map From Work Pose** does not expose score thresholds as user-facing controls.
-- **Auto Map From Work Pose** does not clear the current **Mapping Table** before running.
-- **Auto Map From Work Pose** prefers **Target Geometry Evidence** over **Target Bone Transform Evidence**.
-- **Target Bone Transform Evidence** is weak by default because target bones may be generated, vertical, arbitrary, or only optionally aligned.
-- **Target Seam Clusters** let auto mapping propose one source **Mapping Row** for multiple target **Deform Channels** that meet at split mesh seams.
-- **Target Seam Clusters** are internal to auto mapping in the first design and are not shown as a separate user-facing list.
-- **Target Seam Clusters** are derived during auto mapping and are not saved in the **Retarget Profile** or **Retarget Preset**.
-- Auto mapping keeps its user-facing result simple: matched target channels are assigned into the **Mapping Table**, and unmatched target channels remain available for manual mapping.
-- Auto mapping does not expose detailed confidence bands or scoring evidence in the first design.
-- Auto mapping uses normal **Target Assignment Operation** semantics: matched target channels overwrite previous ownership, and unmatched existing mappings are left unchanged.
-- Auto mapping ownership overwrite is not **Removed Target Link Cleanup** when the target **Deform Channel** remains in the **Mapping Table**.
-- Auto mapping only triggers **Removed Target Link Cleanup** for target **Deform Channels** that leave the **Mapping Table**.
-- Auto mapping does not run **Target Calibration** automatically.
-- Auto mapping does not create or update any **Target Calibration** requirement flag; calibration remains an optional user command.
-- Auto mapping treats source armature bones as read-only; it may update **Mapping Rows** and **Target Links**, but it does not edit source bone data.
-- Auto mapping may create missing **Mapping Rows** for matched source bones; this creates mapping data only and does not create source bones.
-- Auto mapping only creates **Mapping Rows** for matched **Auto Mapping Source Candidates** detected during that command.
+- **Auto Match Visible Meshes** matches **Weighted Source Regions** against **Weighted Target Regions**.
+- **Auto Match Geometry Sampling Adapter** is the only auto-match layer that reads Blender evaluated mesh data, vertex-group weights, visible object state, and object transforms.
+- **Auto Match Array Core** runs after sampling and works on array data only; it does not access `bpy`, Blender objects, or `mathutils` objects.
+- **Auto Match Core Test Surface** is implemented before Blender UI wiring for the first Auto Match rewrite.
+- **Auto Match Core Test Surface** covers **Target Seam Aggregation**, **Deterministic Point-Cloud Compression**, **Visible-Space Spatial Hash**, **Bidirectional Weighted Nearest-Point Distance**, and **Auto Match Assignment Plan** behavior.
+- **Auto Match Array Core** returns an **Auto Match Assignment Plan** instead of mutating the **Mapping Table** directly.
+- **Auto Match Visible Meshes** replaces the current **Mapping Table** with the new **Auto Match Assignment Plan**; rerunning Auto Match is an overwrite operation, not an explicit merge.
+- The first auto-match algorithm uses a single **Visible-Space Weighted Point-Cloud Score** to compare each target-side matching unit with source candidates.
+- **Visible-Space Weighted Point-Cloud Score** is computed from weighted point distribution in **Auto Match Visible Space** and keeps visible-space position as match evidence.
+- **Visible-Space Weighted Point-Cloud Score** uses **Bidirectional Weighted Nearest-Point Distance** as its first concrete scoring formula.
+- **Visible-Space Weighted Point-Cloud Score** ranks source candidates; **Auto Match Visible Meshes** does not leave a target-side matching unit unmapped only because its best score crosses a global hard cutoff.
+- **Bidirectional Weighted Nearest-Point Distance** uses a **Visible-Space Spatial Hash** for nearest-point lookup instead of brute-force all-pairs distance checks.
+- **Deterministic Point-Cloud Compression** may reduce each region before scoring, but it must preserve high-weight samples and visible-space coverage.
+- **Deterministic Point-Cloud Compression** must be stable for the same visible input; it does not use random sampling.
+- **Visible-Space Weighted Point-Cloud Score** does not independently recenter or rescale each candidate before scoring.
+- **Visible-Space Weighted Point-Cloud Score** does not fall back to names, bone transforms, hierarchy, body-part semantics, or IK/FK semantics.
+- **Weighted Source Regions** and **Weighted Target Regions** retain point-level coordinates and weights as **Visible Weighted Point Clouds**.
+- Centroids, bounds, radii, and other summaries are derived from **Visible Weighted Point Clouds** and are not the only region data.
+- **Auto Match Visible Meshes** does not use source or target bone transforms, target bone direction, source/target skeleton hierarchy, IK/FK semantics, or body-part classification.
+- **Auto Match Visible Meshes** does not require a saved **Work Pose**; a saved **Work Pose** may influence matching only by changing the visible source mesh shape.
+- **Target Seam Aggregation** happens before target weighted geometry is matched against source weighted geometry.
+- **Target Seam Aggregation** is target-side only.
+- **Target Seam Aggregation** only joins target **Deform Channels** through duplicate seam vertices with matching positions and matching weights.
+- **Target Seam Aggregation** does not use target bone names, target bone transforms, target hierarchy, region centroid proximity, or merely adjacent mesh areas.
+- Auto matching does not merge multiple source bones into one source candidate.
+- Each **Auto Mapping Source Candidate** remains a possible source **Mapping Row**.
+- When a **Target Seam Cluster** matches a source candidate, all target **Deform Channels** in the cluster are assigned under the matched source **Mapping Row**.
+- **Target Seam Clusters** are internal to auto matching in the first design and are not shown as a separate user-facing list.
+- **Target Seam Clusters** are derived during auto matching and are not saved in the **Retarget Profile** or **Retarget Preset**.
+- Auto matching keeps its user-facing result simple: target channels with usable visible weighted geometry are assigned into the **Mapping Table**, and any remaining cleanup happens through manual mapping after the overwrite.
+- Auto matching overwrites the current **Mapping Table** instead of merging with older rows.
+- Auto matching does not run **Target Calibration** automatically.
+- Auto matching does not create or update any **Target Calibration** requirement flag; calibration remains an optional user command.
+- Auto matching treats source armature bones as read-only; it may update **Mapping Rows** and **Target Links**, but it does not edit source bone data.
+- Auto matching may create missing **Mapping Rows** for matched source bones; this creates mapping data only and does not create source bones.
 - Mapping authoring keeps target-side **Deform Channels** visible for explicit addition.
 - Unmapped target bones are outside Bone Remap's retargeting, calibration, and bake scope.
 - Runtime retargeting writes all mapped **Target Links** and resets those **Deform Channels** to bind/rest before solving.
@@ -667,6 +718,7 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - **Full Matrix Delta** preserves translation, rotation, and scale effects captured by **Work Pose**.
 - **Full Matrix Delta** is measured from **Work Pose Matrix** to **Live Evaluated Source Pose** so Work Pose itself is not double-applied to the target.
 - **Live Matrix Write** writes the **Solved Target Pose Matrix** for each mapped **Target Link**.
+- **Solved Target Pose Matrix** is the visible target result; target hierarchy may affect internal channel storage, but not the user-facing solved result when **Pose Channel Representability** holds.
 - Live retargeting uses **Shared Source Delta** for one-to-many mapping.
 - In **Shared Source Delta**, one **Mapping Row** computes source motion once, and each **Target Link** applies it to its own target bind/reference.
 - First-version **Target Links** do not define their own motion offset, weight, or follow rule.
@@ -856,10 +908,10 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 > **Domain expert:** "No. **Auto Mapping Rules** must be redesigned for direct Source-to-Target retargeting; old bridge heuristics are only reference material."
 
 > **Dev:** "Should Auto Mapping consider every source bone by default?"
-> **Domain expert:** "No. **Auto Map From Work Pose** uses **Weighted Source Candidate Detection** during the command, so default source candidates are source bones with matching weighted source mesh influence."
+> **Domain expert:** "No. **Auto Match Visible Meshes** uses **Weighted Source Candidate Detection** during the command, so default source candidates are source bones with matching weighted source mesh influence."
 
 > **Dev:** "Should Auto Mapping require users to manage a target candidate list?"
-> **Domain expert:** "No. **Auto Map From Work Pose** is a single command. It derives target-side input from weighted target **Deform Channels** in the active **Retarget Profile** and writes matched results into the **Mapping Table**."
+> **Domain expert:** "No. **Auto Match Visible Meshes** is a single command. It derives target-side input from weighted target **Deform Channels** in the active **Retarget Profile** and writes matched results into the **Mapping Table**."
 
 > **Dev:** "What should the first Mapping Authoring Workbench make obvious?"
 > **Domain expert:** "Users must be able to add source rows from selected source bones, add visible target channels to the active row, inspect ownership, and read a **Mapping Health Report**."

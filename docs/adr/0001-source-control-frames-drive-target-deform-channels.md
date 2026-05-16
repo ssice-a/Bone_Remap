@@ -7,6 +7,8 @@ Bone Remap treats **Work Pose** as the source-side control baseline: each source
 - Calibrate target bones as the semantic source of pivot and basis.
 - Use source **Control Frames** as the semantic source of pivot and basis, and write the resulting solved matrices into target **Deform Channels**.
 - Preserve target armature hierarchy in the first solver.
+- Require users to flatten or detach target hierarchy before live retargeting.
+- Treat target hierarchy as an internal Blender representation detail and preserve the same visible solved result for pose-channel-representable matrices.
 - Treat mapped target bones as writable **Deform Channels** for the first solver, with optional target-side normalization as a user command.
 - Duplicate the target armature before normalization.
 - When optional normalization is used, modify the active target armature in place.
@@ -53,6 +55,9 @@ Bone Remap treats **Work Pose** as the source-side control baseline: each source
 - Bake records the visible target result produced by Live Retargeting into location, rotation, and scale action channels.
 - Target bone rest direction is not assumed to be meaningful.
 - The first solver should transfer full matrix deltas, not rotation-only values.
+- The target parent-child hierarchy is not mapping semantics and should not require users to detach target bones for WYSIWYG live preview when the solved result is expressible by Blender pose channels.
+- Live preview, clear/reset of target pose residue, and Bake must preserve the **Solved Target Pose Matrix** as the visible result even when Blender stores target channels relative to parent bones.
+- Some full matrices are not losslessly expressible by a flat target pose channel. In particular, non-uniform parent scale combined with child rotation can create shear. The first version treats that as a representability limit rather than a mapping or target-calibration requirement.
 - Runtime solve should not continuously edit target rest bones; target head positions may be updated only by an explicit Channel Alignment calibration command, followed by bind refresh.
 - Runtime solve uses each mapped Deform Channel's Target Bind Matrix as the target base.
 - Runtime solve reads the current Target Bind Matrix each frame but does not refresh or rewrite it during playback.
@@ -91,6 +96,7 @@ Bone Remap treats **Work Pose** as the source-side control baseline: each source
 - The first-version matrix order is fixed as `source_delta = source_live_matrix @ inverse(source_work_pose_matrix)`.
 - Each mapped target link is solved as `target_pose_matrix = source_delta @ target_bind_matrix`.
 - The target pose matrix is written as the live pose result for that Deform Channel; it is not accumulated on the prior target pose.
+- If the target Deform Channel has a parent, Bone Remap must account for the parent relationship when materializing target pose channels or baked action keys so the final visible matrix still matches `target_pose_matrix` for pose-channel-representable transforms.
 - MVP one-to-many mapping uses shared source delta: one Mapping Row computes one full matrix delta, and each Target Link applies that delta to its own target bind/reference.
 - First-version Target Links do not store their own motion offset, weight, or follow rule.
 - MVP excludes per-target weighted follow and per-target driver rules; those remain future advanced features.
