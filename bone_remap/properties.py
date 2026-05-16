@@ -208,6 +208,11 @@ class BRM_RetargetProfile(PropertyGroup):
         description="Automatically solve the active profile when timeline, source pose, Work Pose, or Mapping Table changes",
         default=False,
     )
+    live_preview_perf_logging: BoolProperty(
+        name="Log Solve Performance",
+        description="Print Live Preview solve timing details to the Blender console",
+        default=False,
+    )
     live_preview_last_written_targets: CollectionProperty(type=BRM_LiveWrittenTarget)
     live_preview_last_result: StringProperty(
         name="Live Preview Last Result",

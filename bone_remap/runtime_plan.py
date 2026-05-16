@@ -50,6 +50,7 @@ def build_runtime_plan(profile, source_armature: Object, target_armature: Object
         return _empty_plan(profile, [state.ValidationMessage("ERROR", "Saved Work Pose has no matrices.")])
 
     source_bones = {bone.name for bone in source_armature.pose.bones} if _is_armature(source_armature) else set()
+    target_bind_matrices = target_bind_matrix_by_bone(profile)
 
     for mapping_row in profile.mapping_rows:
         source_bone_name = mapping_row.source_bone_name
@@ -70,11 +71,12 @@ def build_runtime_plan(profile, source_armature: Object, target_armature: Object
 
         target_channels = []
         for link in mapping_row.target_links:
-            target_bind_matrix = target_bind_matrix_for_bone(target_armature, link.target_bone_name, profile)
-            if target_bind_matrix is None:
+            target_bone = target_armature.data.bones.get(link.target_bone_name) if _is_armature(target_armature) else None
+            if target_bone is None:
                 skipped_links += 1
                 messages.append(state.ValidationMessage("ERROR", f"Invalid target bone: {link.target_bone_name}"))
                 continue
+            target_bind_matrix = target_bind_matrices.get(link.target_bone_name, target_bone.matrix_local.copy())
             target_channels.append(TargetChannelPlan(link.target_bone_name, target_bind_matrix))
 
         if target_channels:
@@ -145,7 +147,22 @@ def work_pose_matrix_by_bone(profile) -> dict[str, Matrix]:
     }
 
 
-def target_bind_matrix_for_bone(target_armature: Object, target_bone_name: str, profile=None) -> Matrix | None:
+def target_bind_matrix_by_bone(profile) -> dict[str, Matrix]:
+    if profile is None:
+        return {}
+    return {
+        item.target_bone_name: work_pose.matrix_from_flat(item.matrix)
+        for item in profile.target_bind_matrices
+        if item.target_bone_name
+    }
+
+
+def target_bind_matrix_for_bone(
+    target_armature: Object,
+    target_bone_name: str,
+    profile=None,
+    target_bind_matrices: dict[str, Matrix] | None = None,
+) -> Matrix | None:
     if not _is_armature(target_armature):
         return None
 
@@ -153,16 +170,49 @@ def target_bind_matrix_for_bone(target_armature: Object, target_bone_name: str, 
     if target_bone is None:
         return None
 
-    if profile is not None:
-        for item in profile.target_bind_matrices:
-            if item.target_bone_name == target_bone_name:
-                return work_pose.matrix_from_flat(item.matrix)
+    if profile is not None or target_bind_matrices is not None:
+        target_bind_matrices = target_bind_matrices or target_bind_matrix_by_bone(profile)
+        target_bind_matrix = target_bind_matrices.get(target_bone_name)
+        if target_bind_matrix is not None:
+            return target_bind_matrix
 
     return target_bone.matrix_local.copy()
 
 
 def target_write_order(target_armature: Object, target_bone_names: Iterable[str]) -> list[str]:
-    return sorted(target_bone_names, key=lambda bone_name: _bone_depth(target_armature, bone_name))
+    depth_cache: dict[str, int] = {}
+    return sorted(target_bone_names, key=lambda bone_name: _cached_bone_depth(target_armature, bone_name, depth_cache))
+
+
+def target_descendant_names(
+    target_armature: Object,
+    root_target_names: Iterable[str],
+    mapped_target_names: Iterable[str] | None = None,
+) -> list[str]:
+    if not _is_armature(target_armature):
+        return []
+
+    mapped_names = set(mapped_target_names) if mapped_target_names is not None else None
+    seen: set[str] = set()
+    ordered: list[str] = []
+    stack = list(unique_names(root_target_names))
+
+    while stack:
+        bone_name = stack.pop()
+        if bone_name in seen:
+            continue
+        seen.add(bone_name)
+
+        if mapped_names is None or bone_name in mapped_names:
+            ordered.append(bone_name)
+
+        bone = target_armature.data.bones.get(bone_name)
+        if bone is None:
+            continue
+        for child_bone in bone.children:
+            stack.append(child_bone.name)
+
+    return ordered
 
 
 def unique_names(names: Iterable[str]) -> list[str]:
@@ -189,10 +239,16 @@ def _is_armature(obj) -> bool:
     return obj is not None and obj.type == "ARMATURE"
 
 
-def _bone_depth(target_armature: Object, bone_name: str) -> int:
+def _cached_bone_depth(target_armature: Object, bone_name: str, depth_cache: dict[str, int]) -> int:
+    cached_depth = depth_cache.get(bone_name)
+    if cached_depth is not None:
+        return cached_depth
+
     bone = target_armature.data.bones.get(bone_name) if _is_armature(target_armature) else None
-    depth = 0
-    while bone is not None and bone.parent is not None:
-        depth += 1
-        bone = bone.parent
+    if bone is None or bone.parent is None:
+        depth_cache[bone_name] = 0
+        return 0
+
+    depth = 1 + _cached_bone_depth(target_armature, bone.parent.name, depth_cache)
+    depth_cache[bone_name] = depth
     return depth

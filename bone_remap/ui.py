@@ -112,7 +112,8 @@ class BRM_PT_retarget_workbench(Panel):
             icon="PLAY",
             depress=profile.live_preview_enabled,
         )
-        if profile.live_preview_last_result and not profile.live_preview_enabled:
+        solve_box.prop(profile, "live_preview_perf_logging", text="Log Perf")
+        if profile.live_preview_last_result:
             solve_box.label(text=profile.live_preview_last_result, icon="INFO")
 
         work_pose_box = layout.box()

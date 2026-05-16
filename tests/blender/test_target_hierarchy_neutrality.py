@@ -29,6 +29,7 @@ def main() -> None:
         test_solve_toggle_operator_is_single_source_of_live_solve_state()
         test_solve_toggle_writes_visible_target_result()
         test_live_solve_updates_after_source_pose_change()
+        test_live_preview_ignores_target_only_updates()
         test_solve_toggle_rejects_profiles_that_write_no_targets()
         test_active_motion_action_selection_updates_source_action()
         test_add_weighted_source_rows_uses_bound_mesh_vertex_groups()
@@ -135,6 +136,114 @@ def test_live_solve_updates_after_source_pose_change() -> None:
         },
         visible_pose_matrices(target, target_names()),
     )
+
+
+def test_partial_solve_only_writes_affected_target_scope() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("PartialSource", source_names())
+    target = create_two_bone_armature("PartialTarget", target_names())
+    profile = create_profile("PartialProfile", source, target)
+    set_pose(source, parent_rotation_z=0.27, child_rotation_x=0.41, parent_scale=(1.3, 1.3, 1.3))
+
+    written_target_maps = []
+
+    from bone_remap import solver as solver_module, pose_matrices
+
+    original_apply = pose_matrices.apply_pose_matrix_map
+
+    def counted_apply(context, armature, pose_matrix_map, update_view_layer=True):
+        written_target_maps.append(tuple(pose_matrix_map.keys()))
+        return original_apply(context, armature, pose_matrix_map, update_view_layer=update_view_layer)
+
+    pose_matrices.apply_pose_matrix_map = counted_apply
+    try:
+        result = solver_module.solve_profile_one_frame(
+            bpy.context,
+            profile,
+            source,
+            target,
+            source_bone_names={"SourceChild"},
+        )
+    finally:
+        pose_matrices.apply_pose_matrix_map = original_apply
+
+    assert result.written_targets == 1
+    assert written_target_maps[-1] == ("TargetChild",)
+    assert_pose_matrices_close(
+        {
+            "TargetChild": visible_pose_matrices(source, source_names())["SourceChild"],
+        },
+        visible_pose_matrices(target, target_names()),
+    )
+
+
+def test_partial_solve_rewrites_descendant_target_scope() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("ClosureSource", source_names())
+    target = create_two_bone_armature("ClosureTarget", target_names(), parent_child=True)
+    profile = create_profile("ClosureProfile", source, target)
+    set_pose(source, parent_rotation_z=0.63, child_rotation_x=0.18, parent_scale=(1.2, 1.2, 1.2))
+
+    from bone_remap import solver as solver_module, pose_matrices
+
+    original_apply = pose_matrices.apply_pose_matrix_map
+    written_target_maps = []
+
+    def counted_apply(context, armature, pose_matrix_map, update_view_layer=True):
+        written_target_maps.append(tuple(pose_matrix_map.keys()))
+        return original_apply(context, armature, pose_matrix_map, update_view_layer=update_view_layer)
+
+    pose_matrices.apply_pose_matrix_map = counted_apply
+    try:
+        result = solver_module.solve_profile_one_frame(
+            bpy.context,
+            profile,
+            source,
+            target,
+            source_bone_names={"SourceRoot"},
+        )
+    finally:
+        pose_matrices.apply_pose_matrix_map = original_apply
+
+    assert result.written_targets == 2
+    assert set(written_target_maps[-1]) == {"TargetRoot", "TargetChild"}
+    source_matrices = visible_pose_matrices(source, source_names())
+    assert_pose_matrices_close(
+        {
+            "TargetRoot": source_matrices["SourceRoot"],
+            "TargetChild": source_matrices["SourceChild"],
+        },
+        visible_pose_matrices(target, target_names()),
+    )
+
+
+def test_live_preview_ignores_target_only_updates() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("TargetOnlySource", source_names())
+    target = create_two_bone_armature("TargetOnlyTarget", target_names())
+    profile = create_profile("TargetOnlyProfile", source, target)
+
+    from bone_remap import live_preview
+
+    assert bpy.ops.bone_remap.live_preview_toggle() == {"FINISHED"}
+    solve_calls = []
+    original_solve_now = live_preview.solve_now
+
+    def counted_solve_now(*args, **kwargs):
+        solve_calls.append(1)
+        return original_solve_now(*args, **kwargs)
+
+    live_preview.solve_now = counted_solve_now
+    try:
+        target.pose.bones["TargetRoot"].location.x += 0.25
+        bpy.context.view_layer.update()
+    finally:
+        live_preview.solve_now = original_solve_now
+
+    assert solve_calls == []
 
 
 def test_solve_toggle_rejects_profiles_that_write_no_targets() -> None:

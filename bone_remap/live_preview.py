@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from time import perf_counter
+
 import bpy
 from bpy.app.handlers import persistent
 from bpy.types import Object, Operator
@@ -11,27 +13,53 @@ from .registration import register_classes, unregister_classes
 
 
 _IS_SOLVING = False
+_MATRIX_EPSILON = 1e-6
+_LAST_SOURCE_SIGNATURES: dict[tuple[int, int, int], dict[str, object | None]] = {}
 
 
 def is_enabled(profile) -> bool:
     return bool(profile is not None and profile.live_preview_enabled)
 
 
-def solve_if_enabled(context, reason: str = "manual", depsgraph=None, update_view_layer: bool = True):
+def solve_if_enabled(
+    context,
+    reason: str = "manual",
+    depsgraph=None,
+    update_view_layer: bool = True,
+    source_bone_names: tuple[str, ...] | None = None,
+    pre_solve_timings: dict[str, float] | None = None,
+    cache_source_signature: bool = True,
+):
     profile = state.get_active_profile(context.scene)
     if not is_enabled(profile):
         return None
-    return solve_now(context, reason=reason, depsgraph=depsgraph, update_view_layer=update_view_layer)
+    return solve_now(
+        context,
+        reason=reason,
+        depsgraph=depsgraph,
+        update_view_layer=update_view_layer,
+        source_bone_names=source_bone_names,
+        pre_solve_timings=pre_solve_timings,
+        cache_source_signature=cache_source_signature,
+    )
 
 
-def solve_now(context, reason: str = "manual", depsgraph=None, update_view_layer: bool = True):
+def solve_now(
+    context,
+    reason: str = "manual",
+    depsgraph=None,
+    update_view_layer: bool = True,
+    source_bone_names: tuple[str, ...] | None = None,
+    pre_solve_timings: dict[str, float] | None = None,
+    cache_source_signature: bool = True,
+):
     global _IS_SOLVING
 
     if _IS_SOLVING:
         return None
 
-    profile = state.get_active_profile(context.scene)
-    if profile is None:
+    active_context = state.get_active_profile_context(context.scene)
+    if active_context is None:
         return None
 
     _IS_SOLVING = True
@@ -40,25 +68,97 @@ def solve_now(context, reason: str = "manual", depsgraph=None, update_view_layer
             context,
             depsgraph=depsgraph,
             update_view_layer=update_view_layer,
+            source_bone_names=source_bone_names,
         )
-        _record_live_result(profile, result, reason)
+        if pre_solve_timings:
+            result.timings.update(pre_solve_timings)
+        if cache_source_signature:
+            cache_started_at = perf_counter()
+            _cache_source_signature(active_context, depsgraph or context.evaluated_depsgraph_get())
+            result.timings["source_cache_ms"] = (perf_counter() - cache_started_at) * 1000.0
+        else:
+            result.timings["source_cache_ms"] = 0.0
+        result.timings["total_with_gate_ms"] = (
+            result.timings.get("total_ms", 0.0)
+            + result.timings.get("source_compare_ms", 0.0)
+            + result.timings.get("source_cache_ms", 0.0)
+        )
+        _record_live_result(active_context.profile, result, reason, replace_written_targets=source_bone_names is None)
         return result
     finally:
         _IS_SOLVING = False
 
 
-def _record_live_result(profile, result: solver.SolveResult, reason: str) -> None:
-    if result.written_target_names:
+def _record_live_result(profile, result: solver.SolveResult, reason: str, replace_written_targets: bool = True) -> None:
+    if replace_written_targets:
         profile.live_preview_last_written_targets.clear()
-        for target_bone_name in result.written_target_names:
-            item = profile.live_preview_last_written_targets.add()
-            item.target_bone_name = target_bone_name
+
+    existing_names = {item.target_bone_name for item in profile.live_preview_last_written_targets if item.target_bone_name}
+    for target_bone_name in result.written_target_names:
+        if target_bone_name in existing_names:
+            continue
+        item = profile.live_preview_last_written_targets.add()
+        item.target_bone_name = target_bone_name
+        existing_names.add(target_bone_name)
 
     errors = [message.text for message in result.messages if message.severity == "ERROR"]
     if errors:
         profile.live_preview_last_result = errors[0]
     else:
-        profile.live_preview_last_result = f"{reason}: wrote {result.written_targets} target channels"
+        profile.live_preview_last_result = _format_live_result(reason, result)
+    if getattr(profile, "live_preview_perf_logging", False):
+        print(_format_console_perf_result(reason, result), flush=True)
+
+
+def _format_live_result(reason: str, result: solver.SolveResult) -> str:
+    timings = result.timings
+    total_ms = timings.get("total_with_gate_ms", timings.get("total_ms", 0.0))
+    scope = "partial" if timings.get("partial", 0.0) else "full"
+    return (
+        f"{reason}: {scope} {result.written_targets} targets "
+        f"{total_ms:.1f}ms "
+        f"gate={timings.get('source_compare_ms', 0.0):.1f} "
+        f"cache={timings.get('source_cache_ms', 0.0):.1f} "
+        f"plan={timings.get('build_plan_ms', 0.0):.1f} "
+        f"eval={timings.get('source_eval_ms', 0.0):.1f} "
+        f"scope={timings.get('scope_ms', 0.0):.1f} "
+        f"calc={timings.get('compute_ms', 0.0):.1f} "
+        f"order={timings.get('order_filter_ms', 0.0):.1f} "
+        f"apply={timings.get('apply_ms', 0.0):.1f} "
+        f"rows={int(timings.get('solved_rows', 0.0))}/{int(timings.get('full_rows', 0.0))}"
+    )
+
+
+def _format_console_perf_result(reason: str, result: solver.SolveResult) -> str:
+    timings = result.timings
+    total_ms = timings.get("total_with_gate_ms", timings.get("total_ms", 0.0))
+    scope = "partial" if timings.get("partial", 0.0) else "full"
+    fields = {
+        "reason": reason,
+        "scope": scope,
+        "written": result.written_targets,
+        "total_ms": f"{total_ms:.3f}",
+        "gate_ms": f"{timings.get('source_compare_ms', 0.0):.3f}",
+        "cache_ms": f"{timings.get('source_cache_ms', 0.0):.3f}",
+        "plan_ms": f"{timings.get('build_plan_ms', 0.0):.3f}",
+        "eval_ms": f"{timings.get('source_eval_ms', 0.0):.3f}",
+        "scope_ms": f"{timings.get('scope_ms', 0.0):.3f}",
+        "calc_ms": f"{timings.get('compute_ms', 0.0):.3f}",
+        "order_ms": f"{timings.get('order_filter_ms', 0.0):.3f}",
+        "apply_ms": f"{timings.get('apply_ms', 0.0):.3f}",
+        "apply_select_ms": f"{timings.get('apply_select_ms', 0.0):.3f}",
+        "apply_parent_ms": f"{timings.get('apply_parent_capture_ms', 0.0):.3f}",
+        "apply_basis_ms": f"{timings.get('apply_basis_ms', 0.0):.3f}",
+        "apply_write_ms": f"{timings.get('apply_write_ms', 0.0):.3f}",
+        "view_update_ms": f"{timings.get('view_update_ms', 0.0):.3f}",
+        "rows": f"{int(timings.get('solved_rows', 0.0))}/{int(timings.get('full_rows', 0.0))}",
+        "targets": f"{int(timings.get('valid_target_writes', 0.0))}/{int(timings.get('target_writes', 0.0))}",
+        "scoped_sources": int(timings.get("scoped_sources", 0.0)),
+        "skipped_rows": result.skipped_rows,
+        "skipped_links": result.skipped_links,
+    }
+    payload = " ".join(f"{key}={value}" for key, value in fields.items())
+    return f"[BRM-PERF] {payload}"
 
 
 def clear_live_preview(context, profile, target_armature: Object) -> tuple[int, list[state.ValidationMessage]]:
@@ -95,10 +195,16 @@ def reset_target_channels_to_bind(
     if target_armature.mode == "EDIT":
         return 0, [state.ValidationMessage("ERROR", "Leave target armature edit mode before clearing live preview.")]
 
+    profile = state.get_active_profile(context.scene)
     target_writes = {}
+    target_bind_matrices = runtime_plan.target_bind_matrix_by_bone(profile)
     for target_bone_name in runtime_plan.unique_names(target_bone_names):
-        profile = state.get_active_profile(context.scene)
-        bind_matrix = runtime_plan.target_bind_matrix_for_bone(target_armature, target_bone_name, profile)
+        bind_matrix = runtime_plan.target_bind_matrix_for_bone(
+            target_armature,
+            target_bone_name,
+            profile,
+            target_bind_matrices,
+        )
         if bind_matrix is None:
             messages.append(state.ValidationMessage("ERROR", f"Invalid target bone: {target_bone_name}"))
             continue
@@ -145,15 +251,13 @@ def _depsgraph_update_relevant(scene, depsgraph) -> bool:
         return False
 
     source = profile.source_armature
-    target = profile.target_armature
     if source is None:
         return False
 
     source_data = source.data
-    target_data = target.data if target is not None else None
     for update in depsgraph.updates:
         updated_id = update.id
-        if _same_id(updated_id, source) or _same_id(updated_id, source_data) or _same_id(updated_id, target_data):
+        if _same_id(updated_id, source) or _same_id(updated_id, source_data):
             return True
 
     return False
@@ -181,7 +285,23 @@ def _depsgraph_update_post(scene, depsgraph):
     context = _current_context_for_scene(scene)
     if context is None:
         return
-    solve_if_enabled(context, reason="depsgraph_update", update_view_layer=False)
+    active_context = state.get_active_profile_context(scene)
+    if active_context is None:
+        return
+    compare_started_at = perf_counter()
+    changed_source_bone_names = _source_bone_names_changed(active_context, depsgraph)
+    source_compare_ms = (perf_counter() - compare_started_at) * 1000.0
+    if not changed_source_bone_names:
+        return
+    solve_if_enabled(
+        context,
+        reason="depsgraph_update",
+        depsgraph=depsgraph,
+        update_view_layer=False,
+        source_bone_names=changed_source_bone_names,
+        pre_solve_timings={"source_compare_ms": source_compare_ms},
+        cache_source_signature=False,
+    )
 
 
 def _append_once(handler_list, handler) -> None:
@@ -192,6 +312,72 @@ def _append_once(handler_list, handler) -> None:
 def _remove_if_present(handler_list, handler) -> None:
     while handler in handler_list:
         handler_list.remove(handler)
+
+
+def _source_signature_key(active_context) -> tuple[int, int, int]:
+    return (
+        active_context.profile.as_pointer(),
+        active_context.source_armature.as_pointer(),
+        active_context.target_armature.as_pointer(),
+    )
+
+
+def _source_pose_signature(active_context, depsgraph) -> dict[str, object | None]:
+    source_armature = active_context.source_armature
+    evaluated_source = source_armature.evaluated_get(depsgraph)
+    bone_names = sorted(
+        {
+            row.source_bone_name
+            for row in active_context.profile.mapping_rows
+            if row.source_bone_name
+        }
+    )
+    signature: dict[str, object | None] = {}
+    for bone_name in bone_names:
+        pose_bone = evaluated_source.pose.bones.get(bone_name)
+        if pose_bone is None:
+            signature[bone_name] = None
+            continue
+        signature[bone_name] = pose_bone.matrix.copy()
+    return signature
+
+
+def _cache_source_signature(active_context, depsgraph) -> None:
+    _LAST_SOURCE_SIGNATURES[_source_signature_key(active_context)] = _source_pose_signature(active_context, depsgraph)
+
+
+def _source_bone_names_changed(active_context, depsgraph) -> tuple[str, ...]:
+    signature_key = _source_signature_key(active_context)
+    current_signature = _source_pose_signature(active_context, depsgraph)
+    previous_signature = _LAST_SOURCE_SIGNATURES.get(signature_key)
+    if previous_signature is None:
+        _LAST_SOURCE_SIGNATURES[signature_key] = current_signature
+        return tuple(sorted(current_signature.keys()))
+
+    changed_names = tuple(
+        bone_name
+        for bone_name in sorted(current_signature.keys())
+        if _signature_matrix_changed(
+            current_signature.get(bone_name),
+            previous_signature.get(bone_name),
+        )
+    )
+    if changed_names:
+        _LAST_SOURCE_SIGNATURES[signature_key] = current_signature
+    return changed_names
+
+
+def _signature_matrix_changed(current, previous) -> bool:
+    if current is None or previous is None:
+        return current is not previous
+
+    for row_index in range(4):
+        current_row = current[row_index]
+        previous_row = previous[row_index]
+        for column_index in range(4):
+            if abs(current_row[column_index] - previous_row[column_index]) > _MATRIX_EPSILON:
+                return True
+    return False
 
 
 def _enable_live_preview(context, profile):
