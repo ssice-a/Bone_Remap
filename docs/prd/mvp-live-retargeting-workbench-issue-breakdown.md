@@ -48,11 +48,11 @@ These are proposed tracer-bullet issues. They are not published yet because GitH
    - **User stories covered**: 10, 11
    - **What to build**: Extend Work Pose Save with source channel snapshots, changed-channel detection, automatic Source Solver Input classification, sparse Input Compensation storage, Classification Report, and overrides for ambiguous channels.
 
-8. **Edit Motion Actions Under Work Pose Layer**
+8. **Edit Source Actions Under Work Pose Layer**
    - **Type**: AFK
    - **Blocked by**: 2, 5
    - **User stories covered**: 31, 32, 33, 34, 35
-   - **What to build**: Add Motion Edit Mode that sets up Blender-native keying/tweak context so manual and auto keyframes write to the active Motion Action while users view the Final Visible Pose under the Work Pose Layer.
+   - **What to build**: Add Source Actions management and automatic Source Action Edit Context so selecting a Source Action makes it the active playback/keying/live-retarget source while users view the Final Visible Pose under the Work Pose Layer.
 
 9. **Bake the Current Live Retargeting Result**
    - **Type**: AFK
@@ -87,7 +87,7 @@ These are proposed tracer-bullet issues. They are not published yet because GitH
 5. Run Live Preview for the Active Retarget Profile
 6. Clear Live Preview and Removed Target Link Cleanup
 7. Classify Work Pose Input and Output Compensation
-8. Edit Motion Actions Under Work Pose Layer
+8. Edit Source Actions Under Work Pose Layer
 9. Bake the Current Live Retargeting Result
 10. Import and Export Retarget Presets
 11. Auto Match Visible Meshes Using Weighted Point Clouds

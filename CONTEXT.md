@@ -106,7 +106,7 @@ _Avoid_: Target-only offset, hidden correction layer, per-frame pose handler
 
 **Work Pose Edit Mode**:
 The user-facing mode for creating or editing **Work Pose**, isolated from the active **Motion Clip**.
-_Avoid_: Motion Edit Mode, editing the current action
+_Avoid_: Source Action Edit Context, editing the current action
 
 **Work Pose Edit Snapshot**:
 The temporary source-side state captured when entering **Work Pose Edit Mode** and used during **Work Pose Save** to detect changed source channels.
@@ -397,19 +397,39 @@ Blender's built-in key insertion, auto-keying, keying sets, and action/tweak beh
 _Avoid_: Bone Remap custom keying subset, transform-only restriction
 
 **Motion Clip**:
-A source-side animation unit that uses one **Motion Action** and owns action-specific settings.
-_Avoid_: Retarget profile, baked target action
+A lightweight source-side action selection entry for one **Motion Action** available on the **Source Armature**.
+_Avoid_: Retarget profile, baked target action, owned animation asset, hidden action stack
+
+**Source Actions**:
+The animation-module UI area for quickly switching, creating, duplicating, removing, and editing the Source Armature's available **Motion Actions**.
+_Avoid_: Plugin-owned clip stack, correction layer manager, target action manager
+
+**Active Source Action**:
+The **Motion Action** currently assigned to the Source Armature for playback, editing, live retargeting, and default bake range selection.
+_Avoid_: Merely selected list row, hidden editable copy, target action
+
+**Source Armature Motion Library**:
+The Source Armature's user-facing list of available **Motion Actions** for quick switching and editing.
+_Avoid_: Retarget Profile data, Retarget Preset data, target-side animation library
+
+**Add Current Source Action**:
+The command that adds the Source Armature's current Blender `animation_data.action` to **Source Actions**.
+_Avoid_: Global action scan, fuzzy action ownership detection, automatic import watcher
 
 **Motion Action**:
 The Blender Action used by the active **Motion Clip**. User-authored motion edits are written directly to this action by default.
-_Avoid_: Hidden correction layer, mandatory action copy, Work Pose
+_Avoid_: Hidden correction layer, mandatory action copy, original/editable action pair, Work Pose
 
-**Motion Edit Mode**:
-The Bone Remap-managed mode for editing the active **Motion Clip** while viewing the **Final Visible Pose**.
-_Avoid_: Work Pose edit, target calibration, target bake, manual Blender NLA setup
+**Source Action Edit Context**:
+The automatically maintained editing context created by selecting an **Active Source Action**. The selected action is the playback, keying, live retargeting, and default bake source while the active **Work Pose Layer** remains visible.
+_Avoid_: Explicit motion edit button, Work Pose edit, target calibration, target bake, manual Blender NLA setup
+
+**Work-Pose-Aware Motion Editing**:
+Editing a **Motion Action** while the visible source result includes the active **Work Pose Layer**, with Bone Remap relying on Blender-native layering/tweak behavior or an equivalent writeback mechanism so keyed edits are stored in the active source action.
+_Avoid_: Editing the raw action without Work Pose context, writing corrections to Work Pose, target-side correction keys
 
 **Manual Motion Keyframing**:
-User-inserted or auto-inserted source-side keyframes authored through **Blender Native Keying** during **Motion Edit Mode** and written to the active **Motion Action**.
+User-inserted or auto-inserted source-side keyframes authored through **Blender Native Keying** in the current **Source Action Edit Context** and written to the active **Motion Action**.
 _Avoid_: Target Armature keying, Work Pose Save, baked target edits, Bone Remap-only channel filter
 
 **Source Pose Stack**:
@@ -722,22 +742,41 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - Live retargeting uses **Shared Source Delta** for one-to-many mapping.
 - In **Shared Source Delta**, one **Mapping Row** computes source motion once, and each **Target Link** applies it to its own target bind/reference.
 - First-version **Target Links** do not define their own motion offset, weight, or follow rule.
-- Corrections to retargeted motion should be authored on the source side through **Motion Edit Mode**.
+- Corrections to retargeted motion should be authored on the source side through **Source Action Edit Context**.
 - A **Retarget Profile** stores long-lived calibration data; a **Motion Clip** stores action-specific data.
 - **Work Pose Layer** belongs to the **Retarget Profile**, not to a **Motion Clip**.
+- **Motion Clips** belong to the **Source Armature Motion Library**, not to the **Retarget Profile**.
 - A **Motion Clip** uses one active **Motion Action**.
-- By default, **Motion Edit Mode** writes user edits directly to the active **Motion Action**.
+- By default, **Source Action Edit Context** writes user edits directly to the active **Motion Action**.
+- A **Motion Clip** does not keep separate original/imported and editable actions in the first animation module design.
+- Editing a **Motion Clip** modifies its source **Motion Action** itself.
+- Preserving a source action requires an explicit duplicate action chosen by the user, not a hidden backup layer.
+- The animation module does not own animation assets; it provides quick switching and editing management for the Source Armature's existing **Motion Actions**.
+- **Source Actions** state is stored on the **Source Armature** object, not on the **Retarget Profile**.
+- **Source Actions** are manually maintained for the Source Armature rather than inferred by scanning every Blender Action.
+- **Add Current Source Action** is the reliable import path after the user imports or assigns an action to the Source Armature.
+- Selecting a **Source Actions** row immediately makes it the **Active Source Action** on the Source Armature and refreshes Normal Preview.
+- **Source Actions** use each Action's own effective frame range by default; per-action range overrides are deferred until there is a concrete need.
+- The same **Motion Action** appears at most once in a Source Armature's **Source Actions** list.
+- Running **Add Current Source Action** for an already-listed Action activates the existing row instead of creating a duplicate row.
+- Creating a new **Source Action** with no **Active Source Action** creates an empty source **Motion Action**, adds it to **Source Actions**, activates it, and establishes **Source Action Edit Context**.
+- Removing a non-active **Source Actions** row only removes that list reference.
+- Removing the **Active Source Action** switches to a neighboring listed action when one exists; if no action remains, the Source Armature action is cleared, **Source Action Edit Context** clears, and Normal Preview refreshes.
 - **Manual Motion Keyframing** belongs to the current **Motion Clip**'s active **Motion Action**.
-- If **Motion Edit Mode** starts without an active **Motion Action**, Bone Remap creates or assigns an empty **Motion Action** before accepting manual keyframes.
+- Manual keyframing requires an **Active Source Action**; users create or add a Source Action before keying.
 - **Manual Motion Keyframing** follows **Blender Native Keying**; Bone Remap does not redefine which source-side properties Blender can key.
-- Bone Remap's responsibility is to enter the correct **Motion Edit Mode**, active **Motion Action**, and **Work Pose Layer** context before Blender keying writes.
+- Bone Remap's responsibility is to maintain the correct active **Motion Action** and **Work Pose Layer** context before Blender keying writes.
 - **Manual Motion Keyframing** keys source-side bones or rig controls under the active **Work Pose Layer**, not the **Target Armature**.
 - Target-side keyframes are outside the retarget correction workflow and can be overwritten by **Live Matrix Write**.
-- Users enter and exit **Motion Edit Mode** through Bone Remap controls.
+- Users do not enter a separate motion edit mode; selecting a **Source Actions** row establishes **Source Action Edit Context** automatically.
 - A user may duplicate a **Motion Action** before editing when preserving the original action matters.
-- **Motion Edit Mode** runs under the active **Work Pose Layer**.
+- **Source Action Edit Context** runs under the active **Work Pose Layer**.
+- **Work-Pose-Aware Motion Editing** must let users edit the final visible source pose under **Work Pose Layer** and write the resulting keyframes back to the active source **Motion Action**.
+- The implementation may use Blender's NLA tweak behavior for this writeback instead of hand-rolling inverse Work Pose math.
+- **Source Action Edit Context** must not silently fall back to raw Action editing when Work-Pose-Aware writeback cannot be guaranteed.
+- If Bone Remap cannot establish a Work-Pose-Aware edit context, manual keying should fail loudly instead of risking incorrect source action keys.
 - A **Source Pose Stack** combines the **Work Pose Layer** and the active **Motion Action** into the **Final Visible Pose**.
-- **Motion Edit Mode** writes user edits to the active **Motion Action**, not to **Work Pose**.
+- **Source Action Edit Context** writes user edits to the active **Motion Action**, not to **Work Pose**.
 - **Bake** records the visible retargeted result, but does not define the realtime retargeting workflow.
 - **Bake** samples the **Bake Source** frame by frame and writes it to a **Target Armature** action.
 - The **Bake Source** is the target-side visible result produced by current Live Retargeting.
@@ -974,16 +1013,16 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 > **Domain expert:** "No. MVP live retargeting uses **Shared Source Delta**: all Target Links under one Mapping Row receive the same source delta against their own target bind/reference."
 
 > **Dev:** "Should a clipping fix be stored on the target rig or in Work Pose?"
-> **Domain expert:** "No. In **Motion Edit Mode**, the fix is written to the current **Motion Clip**'s **Motion Action**."
+> **Domain expert:** "No. In **Source Action Edit Context**, the fix is written to the current **Motion Clip**'s **Motion Action**."
 
-> **Dev:** "Does Motion Edit Mode run under Work Pose Layer?"
+> **Dev:** "Does source action editing run under Work Pose Layer?"
 > **Domain expert:** "Yes. Users edit the active **Motion Action** while viewing the **Final Visible Pose** under the active **Work Pose Layer**."
 
 > **Dev:** "Do we edit the source action for motion fixes?"
-> **Domain expert:** "Yes. By default, **Motion Edit Mode** writes motion fixes directly to the active **Motion Action**. If preserving the original matters, the user duplicates the action first."
+> **Domain expert:** "Yes. By default, **Source Action Edit Context** writes motion fixes directly to the active **Motion Action**. If preserving the original matters, the user duplicates the action first."
 
-> **Dev:** "Should users manually enter Blender's NLA tweak workflow before editing motion?"
-> **Domain expert:** "No. Users enter **Motion Edit Mode** through Bone Remap; Bone Remap owns the edit-mode setup and teardown."
+> **Dev:** "Should users press a separate Bone Remap motion edit button before editing motion?"
+> **Domain expert:** "No. Selecting a **Source Actions** row establishes **Source Action Edit Context** automatically; **Work Pose Edit Mode** remains the explicit edit mode."
 
 > **Dev:** "Is a Retarget Profile always an external preset file?"
 > **Domain expert:** "No. The current working setup is **Project Retarget State** by default. A **Retarget Preset** is created only when the user explicitly exports reusable data."

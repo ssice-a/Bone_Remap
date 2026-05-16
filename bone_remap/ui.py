@@ -206,16 +206,11 @@ class BRM_PT_retarget_workbench(Panel):
             mapping_box.operator("bone_remap.mapping_report_health", icon="INFO")
 
         motion_box = layout.box()
-        motion_box.label(text="Motion Action", icon="ACTION")
+        motion_box.label(text="Source Actions", icon="ACTION")
         row = motion_box.row(align=True)
         row.prop_search(profile, "active_motion_action", context.blend_data, "actions", text="")
+        row.operator("bone_remap.motion_action_new", text="", icon="ADD")
         row.operator("bone_remap.motion_action_duplicate", text="", icon="DUPLICATE")
-        motion_box.operator(
-            "bone_remap.motion_edit_toggle",
-            text="Edit Motion",
-            icon="GREASEPENCIL",
-            depress=profile.motion_editing,
-        )
 
         bake_box = layout.box()
         bake_box.label(text="Bake")

@@ -34,6 +34,12 @@ def sync_active_motion_action(self, context) -> None:
 
     source.animation_data_create().action = self.active_motion_action
     if context is not None:
+        if self.active_motion_action is not None:
+            from . import live_preview, work_pose, work_pose_layer
+
+            if work_pose.has_saved_work_pose(self):
+                work_pose_layer.ensure_work_pose_layer(context, self, source)
+            live_preview.solve_if_enabled(context, reason="source_action_change")
         context.view_layer.update()
 
 
@@ -226,15 +232,9 @@ class BRM_RetargetProfile(PropertyGroup):
     )
     active_motion_action: PointerProperty(
         name="Active Motion Action",
-        description="Source-side Motion Action used by Motion Edit Mode and Bake defaults",
+        description="Source-side Motion Action used for playback, editing, live retargeting, and Bake defaults",
         type=Action,
         update=sync_active_motion_action,
-    )
-    motion_editing: BoolProperty(
-        name="Motion Edit Mode",
-        description="Whether this profile is currently editing source motion",
-        default=False,
-        options={"SKIP_SAVE"},
     )
     bake_use_range_override: BoolProperty(
         name="Use Bake Range Override",

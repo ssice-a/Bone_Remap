@@ -10,7 +10,7 @@ The user needs a WYSIWYG **Retargeting Workbench**: edit a long-lived **Work Pos
 
 ## Solution
 
-Build an MVP vertical slice of Bone Remap around a single **Active Retarget Profile**. The first version should support manual setup, saved **Work Pose**, source-first mapping, realtime **Live Preview**, explicit cleanup of target-side live pose residue, Blender-native **Motion Edit Mode**, and **Bake** from the current visible live result.
+Build an MVP vertical slice of Bone Remap around a single **Active Retarget Profile**. The first version should support manual setup, saved **Work Pose**, source-first mapping, realtime **Live Preview**, explicit cleanup of target-side live pose residue, **Source Action Edit Context** with Blender-native keying, and **Bake** from the current visible live result.
 
 The MVP's central path is:
 
@@ -18,7 +18,7 @@ The MVP's central path is:
 2. User creates or edits **Work Pose** on the visible **Source Armature**.
 3. User creates **Mapping Rows** and adds one or more **Target Links** under each source row.
 4. **Live Preview** reads the evaluated source pose and writes mapped target **Deform Channels**.
-5. User edits source motion in **Motion Edit Mode** using Blender-native keying.
+5. User selects a **Source Action** and edits source motion through **Source Action Edit Context** using Blender-native keying.
 6. User optionally bakes the current visible target result to a **Baked Target Action**.
 
 The first tracer bullet should prove the core retarget loop before building every convenience feature: saved **Work Pose** plus manual **Mapping Table** plus **Live Preview** driving B from A.
@@ -56,9 +56,9 @@ The first tracer bullet should prove the core retarget loop before building ever
 29. As an animator, I want one Mapping Row's target links to share the same source delta, so that one-to-many mapping stays simple and predictable in the MVP.
 30. As an animator, I want live preview to write target pose only, so that previewing does not author target action curves or alter B edit-mode bones.
 31. As an animator, I want motion corrections to be authored on the source side, so that the visible source result remains the source of truth for retargeting.
-32. As an animator, I want **Motion Edit Mode** to run under the Work Pose Layer, so that I edit the same Final Visible Pose that drives the target.
+32. As an animator, I want **Source Action Edit Context** to run under the Work Pose Layer, so that I edit the same Final Visible Pose that drives the target.
 33. As an animator, I want pressing `I`, auto-keying, and Blender keying sets to follow Blender-native behavior, so that I do not learn a separate Bone Remap keying system.
-34. As an animator, I want Motion Edit Mode to create or assign an empty Motion Action when needed, so that I can hand-key a new clip.
+34. As an animator, I want Source Actions to let me create or activate an empty Motion Action when needed, so that I can hand-key a new clip without entering a separate motion edit mode.
 35. As an animator, I want target armature keyframes to be outside the retarget correction path, so that live matrix writes do not conflict with correction data.
 36. As an animator, I want Bake to record the current visible live target result, so that baked output matches what I saw in the viewport.
 37. As an animator, I want Bake to sample every integer frame in the bake range by default, so that constraints, IK, drivers, Work Pose, and live retargeting are preserved.
@@ -79,7 +79,7 @@ The first tracer bullet should prove the core retarget loop before building ever
 ## Implementation Decisions
 
 - Build around a single **Active Retarget Profile** as the runtime context for core commands.
-- Store **Source Armature**, **Target Armature**, **Mapping Table**, **Work Pose**, and motion clip list in the **Retarget Profile**.
+- Store **Source Armature**, **Target Armature**, **Mapping Table**, and **Work Pose** in the **Retarget Profile**; store **Source Actions** on the **Source Armature**.
 - Store an explicit **Auto Match Mesh Scope** so automatic matching knows which source and target mesh fragments participate.
 - Use **Work Pose** as the source-side control baseline and store full evaluated pose matrices for the full visible Source Armature.
 - Work Pose editing is pose-mode, visible-source editing. The first design does not modify source edit-mode bones.
@@ -101,9 +101,10 @@ The first tracer bullet should prove the core retarget loop before building ever
 - Switching Active Retarget Profile changes future live writes but does not automatically clear the previous profile's target pose.
 - **Target Calibration** is optional and never a prerequisite for mapping, live preview, bake, or auto mapping.
 - Optional **Channel Alignment** may move target edit-mode bone heads to source control frame pivots when explicitly run.
-- **Motion Edit Mode** writes directly to the active Motion Clip's Motion Action by default.
-- Motion Edit Mode uses Blender-native key insertion, auto-keying, keying sets, and action/tweak behavior.
-- If Motion Edit Mode starts without an active Motion Action, Bone Remap creates or assigns an empty action before accepting manual keyframes.
+- Selecting a **Source Actions** row establishes **Source Action Edit Context** automatically; there is no separate motion edit button in the MVP UI.
+- **Source Action Edit Context** writes directly to the active Motion Clip's Motion Action by default.
+- Source action editing uses Blender-native key insertion, auto-keying, keying sets, and action/tweak behavior.
+- Manual keyframing requires an active Motion Action; users create, duplicate, or add one through Source Actions before keying.
 - **Bake** records the visible target result produced by Live Retargeting. It is not a separate retargeting algorithm.
 - Bake defaults to the active Motion Action's effective frame range. Scene and custom ranges require explicit Bake Range Override.
 - Bake writes only mapped Deform Channels from the current Mapping Table.
@@ -123,7 +124,7 @@ Major modules for implementation:
 - **Mapping Module**: owns source rows, target links, assignment, owner lookup, health report, and removed-link cleanup triggers.
 - **Live Solver Module**: computes source deltas and solved target pose matrices from cached profile data.
 - **Live Preview Module**: owns enabled state, dependency/dirty tracking, event/update entrypoints, last live-written channel tracking, and Clear Live Preview.
-- **Motion Edit Module**: enters/exits the Blender-native edit/tweak context and ensures manual keying writes to the active Motion Action under Work Pose Layer.
+- **Source Actions Module**: manages the Source Armature's action list, active action switching, automatic Source Action Edit Context, and Work-Pose-aware keying setup.
 - **Bake Module**: samples the visible live result and writes a Baked Target Action.
 - **Preset Module**: imports/exports reusable profile data and applies table replacement cleanup.
 - **Auto Matching Module**: derives visible weighted point clouds, target seam clusters, and mapping assignments from Auto Match Mesh Scope.
@@ -136,7 +137,7 @@ Major modules for implementation:
 - Mapping tests should cover add, move, latest-assignment-wins, duplicate prevention, invalid references, owner reveal, and removed target cleanup.
 - Live preview tests should cover enabled/disabled behavior, active-profile scoping, last live-written channel tracking, Clear Live Preview, profile switching, and cache invalidation preserving visible results.
 - Work Pose tests should cover snapshot capture, changed source channel detection, full-source matrix storage, source solver input classification, ambiguous channel reporting, and override behavior.
-- Motion edit tests should verify that edit setup targets the active Motion Action and that missing actions are created or assigned before manual keying.
+- Source action edit tests should verify that selecting a Source Action targets the active Motion Action, runs under Work Pose Layer, and never requires a separate motion edit button.
 - Bake tests should verify that bake samples the live preview result, uses the action effective range by default, honors range overrides, samples integer frames, writes only bake scope, and handles overwrite scope correctly.
 - Preset tests should verify bone-name resolution, missing reference reports, table replacement, no fallback merge, and cleanup of target channels that leave the mapping table.
 - Auto mapping tests should focus on deterministic matching behavior from weighted geometry and should avoid asserting UI-specific score displays.
