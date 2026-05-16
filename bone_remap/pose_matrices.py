@@ -31,6 +31,7 @@ def apply_pose_matrix_map(
     pose_matrix_map: dict[str, Matrix],
     update_view_layer: bool = True,
     timings: dict[str, float] | None = None,
+    ordered_bone_names: Iterable[str] | None = None,
 ) -> int:
     """Apply final visible pose matrices by writing each bone's local basis.
 
@@ -40,7 +41,11 @@ def apply_pose_matrix_map(
     """
 
     select_started_at = perf_counter()
-    data_bones = tuple(iter_data_bones_depth_first(armature, pose_matrix_map.keys()))
+    data_bones = tuple(
+        _iter_named_data_bones_in_order(armature, ordered_bone_names)
+        if ordered_bone_names is not None
+        else iter_data_bones_depth_first(armature, pose_matrix_map.keys())
+    )
     _record_timing(timings, "apply_select_ms", select_started_at)
 
     parent_started_at = perf_counter()
@@ -147,6 +152,18 @@ def _iter_named_data_bones_depth_first(armature: Object, bone_names: Iterable[st
 
     for data_bone in sorted(data_bones, key=lambda bone: _cached_data_bone_depth(bone, depth_cache)):
         yield data_bone
+
+
+def _iter_named_data_bones_in_order(armature: Object, bone_names: Iterable[str]):
+    seen = set()
+    for bone_name in bone_names:
+        if bone_name in seen:
+            continue
+        seen.add(bone_name)
+
+        data_bone = armature.data.bones.get(bone_name)
+        if data_bone is not None:
+            yield data_bone
 
 
 def _cached_data_bone_depth(data_bone, depth_cache: dict[str, int]) -> int:

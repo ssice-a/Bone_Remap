@@ -7,7 +7,7 @@ from time import perf_counter
 import bpy
 from bpy.types import Operator
 
-from . import auto_match_core, mapping, state, weighted_geometry
+from . import auto_match_core, mapping, runtime_plan, state, weighted_geometry
 from .registration import register_classes, unregister_classes
 
 
@@ -84,6 +84,7 @@ def auto_match_active_profile(context) -> tuple[int, str]:
 def apply_assignment_plan(profile, plan: auto_match_core.AssignmentPlan) -> int:
     profile.mapping_rows.clear()
     mapping.set_active_mapping_row_index(profile, -1)
+    runtime_plan.invalidate_runtime_plan(profile)
 
     matched = 0
     for assignment in plan.assignments:

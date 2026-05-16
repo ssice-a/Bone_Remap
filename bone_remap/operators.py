@@ -67,6 +67,7 @@ class BRM_OT_set_source_from_active(Operator):
         if previous_source is not None and previous_source != armature:
             _remove_work_pose_layer(profile, previous_source)
         profile.source_armature = armature
+        _invalidate_runtime_plan(profile)
         _solve_live_preview_if_enabled(context, reason="source_changed")
         self.report({"INFO"}, f"Source Armature set to {armature.name}")
         return {"FINISHED"}
@@ -89,6 +90,7 @@ class BRM_OT_set_target_from_active(Operator):
             return {"CANCELLED"}
 
         profile.target_armature = armature
+        _invalidate_runtime_plan(profile)
         _solve_live_preview_if_enabled(context, reason="target_changed")
         self.report({"INFO"}, f"Target Armature set to {armature.name}")
         return {"FINISHED"}
@@ -104,6 +106,12 @@ def _remove_work_pose_layer(profile, source_armature) -> None:
     from . import work_pose_layer
 
     work_pose_layer.remove_work_pose_layer(profile, source_armature)
+
+
+def _invalidate_runtime_plan(profile) -> None:
+    from . import runtime_plan
+
+    runtime_plan.invalidate_runtime_plan(profile)
 
 
 class BRM_OT_report_active_profile(Operator):

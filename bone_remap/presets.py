@@ -80,6 +80,7 @@ def import_profile(context, profile, data: dict) -> list[str]:
     _replace_matrix_collection(profile.input_compensations, data.get("input_compensations", []), "bone_name")
     _replace_overrides(profile, data.get("classification_overrides", []))
     _replace_matrix_collection(profile.target_bind_matrices, data.get("target_bind_matrices", []), "target_bone_name")
+    runtime_plan.invalidate_runtime_plan(profile)
 
     new_targets = set(runtime_plan.mapped_target_names(profile))
     leaving_targets = [target for target in old_targets if target not in new_targets]

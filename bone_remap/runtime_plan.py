@@ -29,12 +29,44 @@ class RuntimePlanRow:
 class RuntimePlan:
     rows: tuple[RuntimePlanRow, ...]
     mapped_target_names: tuple[str, ...]
+    mapped_target_write_order: tuple[str, ...]
     skipped_rows: int
     skipped_links: int
     messages: list[state.ValidationMessage]
 
 
+_RUNTIME_PLAN_CACHE: dict[tuple[int, int, int, int, int, int], RuntimePlan] = {}
+
+
+def invalidate_runtime_plan(profile) -> None:
+    if profile is None:
+        return
+
+    profile_pointer = profile.as_pointer()
+    for cache_key in list(_RUNTIME_PLAN_CACHE):
+        if cache_key[0] == profile_pointer:
+            del _RUNTIME_PLAN_CACHE[cache_key]
+
+    if hasattr(profile, "runtime_plan_revision"):
+        profile.runtime_plan_revision += 1
+
+
+def clear_runtime_plan_cache() -> None:
+    _RUNTIME_PLAN_CACHE.clear()
+
+
 def build_runtime_plan(profile, source_armature: Object, target_armature: Object) -> RuntimePlan:
+    cache_key = _runtime_plan_cache_key(profile, source_armature, target_armature)
+    cached_plan = _RUNTIME_PLAN_CACHE.get(cache_key)
+    if cached_plan is not None:
+        return cached_plan
+
+    plan = _build_runtime_plan(profile, source_armature, target_armature)
+    _RUNTIME_PLAN_CACHE[cache_key] = plan
+    return plan
+
+
+def _build_runtime_plan(profile, source_armature: Object, target_armature: Object) -> RuntimePlan:
     messages: list[state.ValidationMessage] = []
     rows: list[RuntimePlanRow] = []
     skipped_rows = 0
@@ -82,12 +114,25 @@ def build_runtime_plan(profile, source_armature: Object, target_armature: Object
         if target_channels:
             rows.append(RuntimePlanRow(source_bone_name, source_work_pose_matrix, tuple(target_channels)))
 
+    mapped_names = tuple(mapped_target_names(profile))
     return RuntimePlan(
         rows=tuple(rows),
-        mapped_target_names=tuple(mapped_target_names(profile)),
+        mapped_target_names=mapped_names,
+        mapped_target_write_order=tuple(target_write_order(target_armature, mapped_names)),
         skipped_rows=skipped_rows,
         skipped_links=skipped_links,
         messages=messages,
+    )
+
+
+def _runtime_plan_cache_key(profile, source_armature: Object, target_armature: Object) -> tuple[int, int, int, int, int, int]:
+    return (
+        profile.as_pointer(),
+        int(getattr(profile, "runtime_plan_revision", 0)),
+        source_armature.as_pointer(),
+        source_armature.data.as_pointer(),
+        target_armature.as_pointer(),
+        target_armature.data.as_pointer(),
     )
 
 
@@ -229,6 +274,7 @@ def _empty_plan(profile, messages: list[state.ValidationMessage]) -> RuntimePlan
     return RuntimePlan(
         rows=(),
         mapped_target_names=tuple(mapped_target_names(profile)),
+        mapped_target_write_order=(),
         skipped_rows=0,
         skipped_links=0,
         messages=messages,

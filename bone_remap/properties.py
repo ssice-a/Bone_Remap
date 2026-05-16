@@ -213,6 +213,12 @@ class BRM_RetargetProfile(PropertyGroup):
         description="Print Live Preview solve timing details to the Blender console",
         default=False,
     )
+    runtime_plan_revision: IntProperty(
+        name="Runtime Plan Revision",
+        description="Internal revision used to invalidate cached retarget runtime plans",
+        default=0,
+        options={"SKIP_SAVE"},
+    )
     live_preview_last_written_targets: CollectionProperty(type=BRM_LiveWrittenTarget)
     live_preview_last_result: StringProperty(
         name="Live Preview Last Result",

@@ -29,6 +29,8 @@ def main() -> None:
         test_solve_toggle_operator_is_single_source_of_live_solve_state()
         test_solve_toggle_writes_visible_target_result()
         test_live_solve_updates_after_source_pose_change()
+        test_partial_solve_only_writes_affected_target_scope()
+        test_partial_solve_rewrites_descendant_target_scope()
         test_live_preview_ignores_target_only_updates()
         test_solve_toggle_rejects_profiles_that_write_no_targets()
         test_active_motion_action_selection_updates_source_action()
@@ -144,6 +146,8 @@ def test_partial_solve_only_writes_affected_target_scope() -> None:
     source = create_two_bone_armature("PartialSource", source_names())
     target = create_two_bone_armature("PartialTarget", target_names())
     profile = create_profile("PartialProfile", source, target)
+    set_pose(source, parent_rotation_z=0.27, child_rotation_x=0.0, parent_scale=(1.3, 1.3, 1.3))
+    solver.solve_profile_one_frame(bpy.context, profile, source, target)
     set_pose(source, parent_rotation_z=0.27, child_rotation_x=0.41, parent_scale=(1.3, 1.3, 1.3))
 
     written_target_maps = []
@@ -152,9 +156,16 @@ def test_partial_solve_only_writes_affected_target_scope() -> None:
 
     original_apply = pose_matrices.apply_pose_matrix_map
 
-    def counted_apply(context, armature, pose_matrix_map, update_view_layer=True):
+    def counted_apply(context, armature, pose_matrix_map, update_view_layer=True, timings=None, ordered_bone_names=None):
         written_target_maps.append(tuple(pose_matrix_map.keys()))
-        return original_apply(context, armature, pose_matrix_map, update_view_layer=update_view_layer)
+        return original_apply(
+            context,
+            armature,
+            pose_matrix_map,
+            update_view_layer=update_view_layer,
+            timings=timings,
+            ordered_bone_names=ordered_bone_names,
+        )
 
     pose_matrices.apply_pose_matrix_map = counted_apply
     try:
@@ -191,9 +202,16 @@ def test_partial_solve_rewrites_descendant_target_scope() -> None:
     original_apply = pose_matrices.apply_pose_matrix_map
     written_target_maps = []
 
-    def counted_apply(context, armature, pose_matrix_map, update_view_layer=True):
+    def counted_apply(context, armature, pose_matrix_map, update_view_layer=True, timings=None, ordered_bone_names=None):
         written_target_maps.append(tuple(pose_matrix_map.keys()))
-        return original_apply(context, armature, pose_matrix_map, update_view_layer=update_view_layer)
+        return original_apply(
+            context,
+            armature,
+            pose_matrix_map,
+            update_view_layer=update_view_layer,
+            timings=timings,
+            ordered_bone_names=ordered_bone_names,
+        )
 
     pose_matrices.apply_pose_matrix_map = counted_apply
     try:

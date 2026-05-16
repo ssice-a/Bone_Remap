@@ -62,6 +62,7 @@ def channel_align_active_profile(context) -> tuple[int, str]:
                 except RuntimeError:
                     pass
 
+    runtime_plan.invalidate_runtime_plan(profile)
     return moved, f"Aligned {moved} mapped target channel heads."
 
 
@@ -83,6 +84,7 @@ def refresh_target_bind_active_profile(context) -> tuple[int, str]:
         item = _find_or_create_target_bind(profile, target_bone_name)
         item.matrix = work_pose.flatten_matrix(target_bone.matrix_local)
 
+    runtime_plan.invalidate_runtime_plan(profile)
     _solve_live_preview_if_enabled(context)
     return len(target_names), f"Refreshed target bind/reference for {len(target_names)} mapped channels."
 

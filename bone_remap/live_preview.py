@@ -74,7 +74,10 @@ def solve_now(
             result.timings.update(pre_solve_timings)
         if cache_source_signature:
             cache_started_at = perf_counter()
-            _cache_source_signature(active_context, depsgraph or context.evaluated_depsgraph_get())
+            if result.source_pose_signature is not None:
+                _cache_source_signature_map(active_context, result.source_pose_signature)
+            else:
+                _cache_source_signature(active_context, depsgraph or context.evaluated_depsgraph_get())
             result.timings["source_cache_ms"] = (perf_counter() - cache_started_at) * 1000.0
         else:
             result.timings["source_cache_ms"] = 0.0
@@ -270,16 +273,36 @@ def _same_id(candidate, expected) -> bool:
 
 
 @persistent
-def _frame_change_post(scene, _depsgraph=None):
+def _frame_change_post(scene, depsgraph=None):
     context = _current_context_for_scene(scene)
     if context is None:
         return
-    solve_if_enabled(context, reason="frame_change", update_view_layer=False)
+    active_context = state.get_active_profile_context(scene)
+    if active_context is None:
+        return
+
+    active_depsgraph = depsgraph or context.evaluated_depsgraph_get()
+    compare_started_at = perf_counter()
+    changed_source_bone_names = _source_bone_names_changed(active_context, active_depsgraph)
+    source_compare_ms = (perf_counter() - compare_started_at) * 1000.0
+    if not changed_source_bone_names:
+        return
+
+    solve_if_enabled(
+        context,
+        reason="frame_change",
+        depsgraph=active_depsgraph,
+        update_view_layer=False,
+        source_bone_names=changed_source_bone_names,
+        pre_solve_timings={"source_compare_ms": source_compare_ms},
+        cache_source_signature=False,
+    )
 
 
 @persistent
 def _depsgraph_update_post(scene, depsgraph):
-    if not _depsgraph_update_relevant(scene, depsgraph):
+    profile = state.get_active_profile(scene)
+    if not is_enabled(profile):
         return
 
     context = _current_context_for_scene(scene)
@@ -287,6 +310,10 @@ def _depsgraph_update_post(scene, depsgraph):
         return
     active_context = state.get_active_profile_context(scene)
     if active_context is None:
+        return
+    if _armature_data_updated(active_context, depsgraph):
+        runtime_plan.invalidate_runtime_plan(active_context.profile)
+    if not _depsgraph_update_relevant(scene, depsgraph):
         return
     compare_started_at = perf_counter()
     changed_source_bone_names = _source_bone_names_changed(active_context, depsgraph)
@@ -301,6 +328,15 @@ def _depsgraph_update_post(scene, depsgraph):
         source_bone_names=changed_source_bone_names,
         pre_solve_timings={"source_compare_ms": source_compare_ms},
         cache_source_signature=False,
+    )
+
+
+def _armature_data_updated(active_context, depsgraph) -> bool:
+    source_data = active_context.source_armature.data
+    target_data = active_context.target_armature.data
+    return any(
+        _same_id(update.id, source_data) or _same_id(update.id, target_data)
+        for update in depsgraph.updates
     )
 
 
@@ -343,7 +379,11 @@ def _source_pose_signature(active_context, depsgraph) -> dict[str, object | None
 
 
 def _cache_source_signature(active_context, depsgraph) -> None:
-    _LAST_SOURCE_SIGNATURES[_source_signature_key(active_context)] = _source_pose_signature(active_context, depsgraph)
+    _cache_source_signature_map(active_context, _source_pose_signature(active_context, depsgraph))
+
+
+def _cache_source_signature_map(active_context, signature: dict[str, object | None]) -> None:
+    _LAST_SOURCE_SIGNATURES[_source_signature_key(active_context)] = signature
 
 
 def _source_bone_names_changed(active_context, depsgraph) -> tuple[str, ...]:

@@ -55,6 +55,7 @@ def ensure_mapping_row(profile, source_bone_name: str):
     row.source_bone_name = source_bone_name
     row.active_target_link_index = -1
     set_active_mapping_row_index(profile, len(profile.mapping_rows) - 1)
+    runtime_plan.invalidate_runtime_plan(profile)
     return row, True
 
 
@@ -78,6 +79,8 @@ def assign_targets_to_row(profile, row, target_bone_names: list[str]) -> tuple[i
             assigned += 1
 
     _clamp_target_link_index(row)
+    if assigned or moved:
+        runtime_plan.invalidate_runtime_plan(profile)
     return assigned, moved
 
 
@@ -332,6 +335,7 @@ class BRM_OT_mapping_remove_active_source_row(Operator):
         source_bone_name = row.source_bone_name
         profile.mapping_rows.remove(index)
         set_active_mapping_row_index(profile, min(index, len(profile.mapping_rows) - 1))
+        runtime_plan.invalidate_runtime_plan(profile)
 
         cleanup_count = _cleanup_removed_targets(context, profile, target, removed_targets)
         _solve_live_preview_if_enabled(context, reason="mapping_source_row_removed")
@@ -445,6 +449,7 @@ class BRM_OT_mapping_remove_active_target_link(Operator):
         target_bone_name = row.target_links[index].target_bone_name
         row.target_links.remove(index)
         _clamp_target_link_index(row)
+        runtime_plan.invalidate_runtime_plan(profile)
 
         cleanup_count = _cleanup_removed_targets(context, profile, target, [target_bone_name])
         _solve_live_preview_if_enabled(context, reason="mapping_target_link_removed")
@@ -478,6 +483,8 @@ class BRM_OT_mapping_unassign_selected_targets(Operator):
                     removed_targets.append(target_bone_name)
                 _remove_target_from_row(row, target_bone_name)
             removed += before - len(row.target_links)
+        if removed:
+            runtime_plan.invalidate_runtime_plan(profile)
 
         cleanup_count = _cleanup_removed_targets(context, profile, target, removed_targets)
         _solve_live_preview_if_enabled(context, reason="mapping_targets_unassigned")

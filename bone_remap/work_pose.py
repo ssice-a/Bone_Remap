@@ -39,6 +39,7 @@ def capture_work_pose(context, profile, source_armature: Object) -> int:
         item.matrix = flatten_matrix(pose_bone.matrix)
 
     profile.work_pose_saved = len(profile.work_pose_matrices) > 0
+    _invalidate_runtime_plan(profile)
     return len(profile.work_pose_matrices)
 
 
@@ -378,6 +379,7 @@ class BRM_OT_work_pose_reset_to_rest(Operator):
         profile.input_compensations.clear()
         profile.classification_report.clear()
         profile.work_pose_saved = False
+        _invalidate_runtime_plan(profile)
         _remove_work_pose_layer(profile, source)
         reset_source_pose_to_rest(context, source)
 
@@ -483,6 +485,12 @@ def _remove_work_pose_layer(profile, source_armature: Object) -> bool:
     from . import work_pose_layer
 
     return work_pose_layer.remove_work_pose_layer(profile, source_armature)
+
+
+def _invalidate_runtime_plan(profile) -> None:
+    from . import runtime_plan
+
+    runtime_plan.invalidate_runtime_plan(profile)
 
 
 _CLASSES = (

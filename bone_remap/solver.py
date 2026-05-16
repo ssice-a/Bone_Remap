@@ -22,6 +22,7 @@ class SolveResult:
     skipped_links: int
     messages: list[state.ValidationMessage]
     timings: dict[str, float]
+    source_pose_signature: dict[str, Matrix] | None = None
 
 
 def solve_active_profile_one_frame(
@@ -96,6 +97,7 @@ def solve_profile_one_frame(
     skipped_links = 0
 
     compute_started_at = perf_counter()
+    source_pose_signature = {} if source_bone_name_scope is None else None
     for row in rows_to_solve:
         source_pose_bone = evaluated_source.pose.bones.get(row.source_bone_name)
         if source_pose_bone is None:
@@ -103,15 +105,24 @@ def solve_profile_one_frame(
             messages.append(state.ValidationMessage("ERROR", f"Invalid source bone: {row.source_bone_name}"))
             continue
 
-        source_delta = source_pose_bone.matrix.copy() @ row.source_work_pose_matrix.inverted_safe()
+        source_matrix = source_pose_bone.matrix.copy()
+        if source_pose_signature is not None:
+            source_pose_signature[row.source_bone_name] = source_matrix
+        source_delta = source_matrix @ row.source_work_pose_matrix.inverted_safe()
         for target_channel in row.target_channels:
             target_writes[target_channel.bone_name] = source_delta @ target_channel.bind_matrix
     compute_ms = _elapsed_ms(compute_started_at)
 
     order_started_at = perf_counter()
+    target_write_order = (
+        plan.mapped_target_write_order
+        if source_bone_name_scope is None
+        else runtime_plan.target_write_order(target_armature, target_writes)
+    )
     written_target_names = [
         target_bone_name
-        for target_bone_name in runtime_plan.target_write_order(target_armature, target_writes)
+        for target_bone_name in target_write_order
+        if target_bone_name in target_writes
         if target_armature.pose.bones.get(target_bone_name) is not None
     ]
     skipped_links += len(target_writes) - len(written_target_names)
@@ -135,6 +146,7 @@ def solve_profile_one_frame(
             valid_target_writes,
             update_view_layer=update_view_layer,
             timings=apply_detail_timings,
+            ordered_bone_names=written_target_names,
         )
         apply_ms = _elapsed_ms(apply_started_at)
     elif update_view_layer:
@@ -167,6 +179,7 @@ def solve_profile_one_frame(
             valid_target_writes=float(len(valid_target_writes)),
             partial=0.0 if source_bone_name_scope is None else 1.0,
         ),
+        source_pose_signature=source_pose_signature,
     )
 
 
