@@ -64,6 +64,9 @@ def solve_now(
 
     _IS_SOLVING = True
     try:
+        from . import motion_edit
+
+        motion_edit.bind_active_source_action(active_context.profile, active_context.source_armature, context)
         result = solver.solve_active_profile_one_frame(
             context,
             depsgraph=depsgraph,
@@ -277,9 +280,15 @@ def _frame_change_post(scene, depsgraph=None):
     context = _current_context_for_scene(scene)
     if context is None:
         return
+    profile = state.get_active_profile(scene)
+    if not is_enabled(profile):
+        return
     active_context = state.get_active_profile_context(scene)
     if active_context is None:
         return
+    from . import motion_edit
+
+    motion_edit.bind_active_source_action(active_context.profile, active_context.source_armature, context)
 
     active_depsgraph = depsgraph or context.evaluated_depsgraph_get()
     compare_started_at = perf_counter()
@@ -311,6 +320,9 @@ def _depsgraph_update_post(scene, depsgraph):
     active_context = state.get_active_profile_context(scene)
     if active_context is None:
         return
+    from . import motion_edit
+
+    motion_edit.bind_active_source_action(active_context.profile, active_context.source_armature, context)
     if _armature_data_updated(active_context, depsgraph):
         runtime_plan.invalidate_runtime_plan(active_context.profile)
     if not _depsgraph_update_relevant(scene, depsgraph):

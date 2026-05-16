@@ -6,7 +6,7 @@ import bpy
 from bpy.types import Action, NlaTrack, Object
 from mathutils import Matrix
 
-from . import pose_matrices, work_pose
+from . import action_slots, pose_matrices, work_pose
 
 
 ACTION_PREFIX = "BRM_WorkPose"
@@ -67,6 +67,7 @@ def _rewrite_work_pose_action(context, profile, source_armature: Object, action:
     basis_matrix_map = pose_matrices.basis_matrix_map_from_pose_matrices(source_armature, pose_matrix_map)
     animation_data = source_armature.animation_data_create()
     original_action = animation_data.action
+    original_action_slot = getattr(animation_data, "action_slot", None)
     original_pose = _capture_pose_matrices(source_armature)
     original_nla_mutes = [(track, track.mute) for track in animation_data.nla_tracks]
 
@@ -81,6 +82,10 @@ def _rewrite_work_pose_action(context, profile, source_armature: Object, action:
             _key_pose_transforms(source_armature, basis_matrix_map.keys(), frame)
     finally:
         animation_data.action = original_action
+        if original_action is None:
+            action_slots.clear_action_slot(animation_data)
+        else:
+            action_slots.sync_action_slot(animation_data, original_action_slot)
         for track, mute in original_nla_mutes:
             track.mute = mute
         _restore_pose_matrices(context, source_armature, original_pose)
@@ -103,6 +108,7 @@ def _ensure_nla_strip(animation_data, action: Action, frame_start: int, frame_en
         strip = track.strips.new(STRIP_NAME, frame_start, action)
 
     strip.action = action
+    action_slots.sync_action_slot(strip)
     strip.frame_start = frame_start
     strip.frame_end = max(frame_end, frame_start + 1)
     strip.action_frame_start = ACTION_FRAME_START

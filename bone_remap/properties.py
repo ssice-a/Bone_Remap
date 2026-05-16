@@ -32,7 +32,14 @@ def sync_active_motion_action(self, context) -> None:
     if source is None or source.type != "ARMATURE":
         return
 
-    source.animation_data_create().action = self.active_motion_action
+    animation_data = source.animation_data_create()
+    animation_data.action = self.active_motion_action
+    from . import action_slots
+
+    if self.active_motion_action is None:
+        action_slots.clear_action_slot(animation_data)
+    else:
+        action_slots.sync_action_slot(animation_data)
     if context is not None:
         if self.active_motion_action is not None:
             from . import live_preview, work_pose, work_pose_layer
@@ -40,6 +47,32 @@ def sync_active_motion_action(self, context) -> None:
             if work_pose.has_saved_work_pose(self):
                 work_pose_layer.ensure_work_pose_layer(context, self, source)
             live_preview.solve_if_enabled(context, reason="source_action_change")
+        context.view_layer.update()
+
+
+def sync_active_source_action_index(self, context) -> None:
+    if context is None:
+        return
+
+    source = self
+    source_actions = getattr(source, "brm_source_actions", ())
+    index = int(getattr(source, "brm_active_source_action_index", -1))
+    action = source_actions[index].action if 0 <= index < len(source_actions) else None
+
+    from . import state
+
+    profile = state.get_active_profile(context.scene)
+    if profile is not None and profile.source_armature == source:
+        profile.active_motion_action = action
+    else:
+        animation_data = source.animation_data_create()
+        animation_data.action = action
+        from . import action_slots
+
+        if action is None:
+            action_slots.clear_action_slot(animation_data)
+        else:
+            action_slots.sync_action_slot(animation_data)
         context.view_layer.update()
 
 
@@ -144,6 +177,16 @@ class BRM_AutoMatchMeshReference(PropertyGroup):
         description="Mesh object used by Auto Match Visible Meshes",
         type=Object,
         poll=poll_mesh,
+    )
+
+
+class BRM_SourceActionItem(PropertyGroup):
+    """One user-managed Source Action available on a Source Armature."""
+
+    action: PointerProperty(
+        name="Action",
+        description="Source-side Motion Action available for playback, editing, live retargeting, and Bake defaults",
+        type=Action,
     )
 
 
@@ -261,6 +304,7 @@ _CLASSES = (
     BRM_TargetBindMatrix,
     BRM_LiveWrittenTarget,
     BRM_AutoMatchMeshReference,
+    BRM_SourceActionItem,
     BRM_MappingRow,
     BRM_RetargetProfile,
 )
@@ -283,9 +327,28 @@ def register():
             default=-1,
         ),
     )
+    setattr(
+        bpy.types.Object,
+        "brm_source_actions",
+        CollectionProperty(type=BRM_SourceActionItem),
+    )
+    setattr(
+        bpy.types.Object,
+        "brm_active_source_action_index",
+        IntProperty(
+            name="Active Source Action",
+            description="Active Source Action row used by the current source armature",
+            default=-1,
+            update=sync_active_source_action_index,
+        ),
+    )
 
 
 def unregister():
+    if hasattr(bpy.types.Object, "brm_active_source_action_index"):
+        delattr(bpy.types.Object, "brm_active_source_action_index")
+    if hasattr(bpy.types.Object, "brm_source_actions"):
+        delattr(bpy.types.Object, "brm_source_actions")
     if hasattr(bpy.types.Scene, ACTIVE_PROFILE_INDEX_ATTR):
         delattr(bpy.types.Scene, ACTIVE_PROFILE_INDEX_ATTR)
     if hasattr(bpy.types.Scene, PROFILE_COLLECTION_ATTR):

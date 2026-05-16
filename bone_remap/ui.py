@@ -65,6 +65,22 @@ class BRM_UL_target_links(UIList):
             layout.label(text="", icon_value=icon)
 
 
+class BRM_UL_source_actions(UIList):
+    bl_idname = "BRM_UL_source_actions"
+
+    def draw_item(self, _context, layout, _data, item, icon, _active_data, _active_propname, _index):
+        if self.layout_type in {"DEFAULT", "COMPACT"}:
+            action = item.action
+            row = layout.row(align=True)
+            row.label(text=action.name if action is not None else "Missing Action", icon="ACTION")
+            if action is not None:
+                frame_start, frame_end = action.frame_range
+                row.label(text=f"{int(frame_start)}-{int(frame_end)}", icon="TIME")
+        elif self.layout_type == "GRID":
+            layout.alignment = "CENTER"
+            layout.label(text="", icon_value=icon)
+
+
 class BRM_PT_retarget_workbench(Panel):
     bl_idname = "BRM_PT_retarget_workbench"
     bl_label = "Bone Remap"
@@ -207,10 +223,25 @@ class BRM_PT_retarget_workbench(Panel):
 
         motion_box = layout.box()
         motion_box.label(text="Source Actions", icon="ACTION")
-        row = motion_box.row(align=True)
-        row.prop_search(profile, "active_motion_action", context.blend_data, "actions", text="")
-        row.operator("bone_remap.motion_action_new", text="", icon="ADD")
-        row.operator("bone_remap.motion_action_duplicate", text="", icon="DUPLICATE")
+        source = profile.source_armature
+        if source is None:
+            motion_box.label(text="No Source Armature", icon="INFO")
+        else:
+            row = motion_box.row()
+            row.template_list(
+                BRM_UL_source_actions.bl_idname,
+                "",
+                source,
+                "brm_source_actions",
+                source,
+                "brm_active_source_action_index",
+                rows=4,
+            )
+            buttons = row.column(align=True)
+            buttons.operator("bone_remap.motion_action_add_current", text="", icon="IMPORT")
+            buttons.operator("bone_remap.motion_action_new", text="", icon="ADD")
+            buttons.operator("bone_remap.motion_action_duplicate", text="", icon="DUPLICATE")
+            buttons.operator("bone_remap.motion_action_remove", text="", icon="REMOVE")
 
         bake_box = layout.box()
         bake_box.label(text="Bake")
@@ -248,6 +279,7 @@ _CLASSES = (
     BRM_UL_retarget_profiles,
     BRM_UL_mapping_rows,
     BRM_UL_target_links,
+    BRM_UL_source_actions,
     BRM_PT_retarget_workbench,
 )
 

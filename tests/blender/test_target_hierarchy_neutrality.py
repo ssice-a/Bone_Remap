@@ -34,6 +34,10 @@ def main() -> None:
         test_live_preview_ignores_target_only_updates()
         test_solve_toggle_rejects_profiles_that_write_no_targets()
         test_active_motion_action_selection_updates_source_action()
+        test_source_actions_list_add_select_and_remove()
+        test_source_action_selection_solves_live_preview_immediately()
+        test_live_preview_rebinds_selected_source_action_when_animation_data_action_is_cleared()
+        test_source_action_selection_preserves_imported_action_slot_under_work_pose_layer()
         test_add_weighted_source_rows_uses_bound_mesh_vertex_groups()
         test_auto_match_visible_meshes_uses_shared_weighted_geometry()
         test_auto_match_visible_meshes_replaces_stale_mapping_rows()
@@ -295,6 +299,132 @@ def test_active_motion_action_selection_updates_source_action() -> None:
 
     assert source.animation_data is not None
     assert source.animation_data.action == action
+
+
+def test_source_actions_list_add_select_and_remove() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("SourceActionsSource", source_names())
+    target = create_two_bone_armature("SourceActionsTarget", target_names())
+    profile = create_profile("SourceActionsProfile", source, target)
+    action_a = bpy.data.actions.new("SourceActionA")
+    action_b = bpy.data.actions.new("SourceActionB")
+
+    source.animation_data_create().action = action_a
+    assert bpy.ops.bone_remap.motion_action_add_current() == {"FINISHED"}
+    assert len(source.brm_source_actions) == 1
+    assert source.brm_source_actions[0].action == action_a
+    assert source.brm_active_source_action_index == 0
+    assert profile.active_motion_action == action_a
+
+    assert bpy.ops.bone_remap.motion_action_add_current() == {"FINISHED"}
+    assert len(source.brm_source_actions) == 1
+
+    source.animation_data.action = action_b
+    assert bpy.ops.bone_remap.motion_action_add_current() == {"FINISHED"}
+    assert len(source.brm_source_actions) == 2
+    assert source.brm_active_source_action_index == 1
+    assert profile.active_motion_action == action_b
+
+    source.brm_active_source_action_index = 0
+    assert profile.active_motion_action == action_a
+    assert source.animation_data.action == action_a
+
+    assert bpy.ops.bone_remap.motion_action_remove() == {"FINISHED"}
+    assert len(source.brm_source_actions) == 1
+    assert source.brm_source_actions[0].action == action_b
+    assert source.brm_active_source_action_index == 0
+    assert profile.active_motion_action == action_b
+
+    assert bpy.ops.bone_remap.motion_action_remove() == {"FINISHED"}
+    assert len(source.brm_source_actions) == 0
+    assert source.brm_active_source_action_index == -1
+    assert profile.active_motion_action is None
+    assert source.animation_data.action is None
+
+
+def test_source_action_selection_solves_live_preview_immediately() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("ActionSwitchSource", source_names())
+    target = create_two_bone_armature("ActionSwitchTarget", target_names())
+    profile = create_profile("ActionSwitchProfile", source, target)
+    action_a = bpy.data.actions.new("ActionSwitchA")
+    action_b = bpy.data.actions.new("ActionSwitchB")
+
+    source.animation_data_create().action = action_a
+    key_source_pose(source, frame=2, parent_rotation_z=0.15, child_rotation_x=0.0)
+    assert bpy.ops.bone_remap.motion_action_add_current() == {"FINISHED"}
+
+    source.animation_data.action = action_b
+    key_source_pose(source, frame=2, parent_rotation_z=0.75, child_rotation_x=0.0)
+    assert bpy.ops.bone_remap.motion_action_add_current() == {"FINISHED"}
+
+    profile.live_preview_enabled = True
+    bpy.context.scene.frame_set(2)
+
+    source.brm_active_source_action_index = 0
+    target_a_z = target.pose.bones["TargetRoot"].rotation_euler.z
+
+    source.brm_active_source_action_index = 1
+    target_b_z = target.pose.bones["TargetRoot"].rotation_euler.z
+
+    assert abs(target_a_z - 0.15) < 0.01
+    assert abs(target_b_z - 0.75) < 0.01
+
+
+def test_live_preview_rebinds_selected_source_action_when_animation_data_action_is_cleared() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("ActionRebindSource", source_names())
+    target = create_two_bone_armature("ActionRebindTarget", target_names())
+    profile = create_profile("ActionRebindProfile", source, target)
+    action = bpy.data.actions.new("ActionRebindMotion")
+
+    source.animation_data_create().action = action
+    key_source_pose(source, frame=2, parent_rotation_z=0.65, child_rotation_x=0.0)
+    assert bpy.ops.bone_remap.motion_action_add_current() == {"FINISHED"}
+
+    source.animation_data.action = None
+    profile.live_preview_enabled = True
+    bpy.context.scene.frame_set(2)
+    bpy.context.view_layer.update()
+
+    assert source.animation_data.action == action
+    assert abs(target.pose.bones["TargetRoot"].rotation_euler.z - 0.65) < 0.01
+
+
+def test_source_action_selection_preserves_imported_action_slot_under_work_pose_layer() -> None:
+    clear_scene()
+
+    donor = create_two_bone_armature("ImportedActionRig", source_names())
+    bpy.context.view_layer.objects.active = donor
+    bpy.ops.object.mode_set(mode="POSE")
+    key_source_pose(donor, frame=1, parent_rotation_z=0.0, child_rotation_x=0.0)
+    key_source_pose(donor, frame=2, parent_rotation_z=0.6, child_rotation_x=0.4)
+    imported_action = donor.animation_data.action
+    assert imported_action is not None
+    assert len(imported_action.slots) == 1
+
+    bpy.ops.object.mode_set(mode="OBJECT")
+    source = create_two_bone_armature("SlotSource", source_names())
+    target = create_two_bone_armature("SlotTarget", target_names())
+    profile = create_profile("SlotProfile", source, target)
+    profile.live_preview_enabled = True
+
+    source.animation_data_create().action = imported_action
+    assert bpy.ops.bone_remap.motion_action_add_current() == {"FINISHED"}
+
+    animation_data = source.animation_data
+    assert animation_data is not None
+    assert animation_data.action == imported_action
+    assert animation_data.action_slot is not None
+
+    bpy.context.scene.frame_set(2)
+    bpy.context.view_layer.update()
+    result = solver.solve_active_profile_one_frame(bpy.context)
+    assert result.written_targets == 2
+    assert abs(target.pose.bones["TargetRoot"].rotation_euler.z) > 0.1
 
 
 def test_add_weighted_source_rows_uses_bound_mesh_vertex_groups() -> None:

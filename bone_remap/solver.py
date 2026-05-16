@@ -58,6 +58,9 @@ def solve_profile_one_frame(
     total_started_at = perf_counter()
     if source_armature.mode == "EDIT" or target_armature.mode == "EDIT":
         return _error_result("Leave armature edit mode before solving.", total_started_at)
+    from . import motion_edit
+
+    motion_edit.bind_active_source_action(profile, source_armature)
 
     plan_started_at = perf_counter()
     plan = runtime_plan.build_runtime_plan(profile, source_armature, target_armature)
