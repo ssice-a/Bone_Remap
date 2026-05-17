@@ -205,16 +205,8 @@ class BRM_PT_retarget_workbench(Panel):
             mapping_box.operator("bone_remap.mapping_remove_active_target_link", icon="REMOVE")
 
         row = mapping_box.row(align=True)
-        row.operator("bone_remap.mapping_assign_selected_targets", icon="LINKED")
-        row.operator("bone_remap.mapping_unassign_selected_targets", icon="UNLINKED")
-        row = mapping_box.row(align=True)
-        row.operator("bone_remap.mapping_reveal_active_target_owner", icon="VIEWZOOM")
-
-        if profile.revealed_target_bone_name:
-            revealed_owner = profile.revealed_owner_source_bone_name or "Unmapped"
-            mapping_box.label(text=f"{profile.revealed_target_bone_name} -> {revealed_owner}", icon="VIEWZOOM")
-            if profile.revealed_owner_source_bone_name:
-                mapping_box.operator("bone_remap.mapping_use_revealed_owner_as_destination", icon="FORWARD")
+        row.operator("bone_remap.mapping_assign_selected_targets", text="Assign To Active Source", icon="LINKED")
+        row.operator("bone_remap.mapping_unassign_selected_targets", text="Remove Selected Targets", icon="UNLINKED")
         if issue_count:
             for message in health_messages[:3]:
                 if message.severity in {"ERROR", "WARNING"}:

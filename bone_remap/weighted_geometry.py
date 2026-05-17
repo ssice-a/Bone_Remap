@@ -170,6 +170,62 @@ def visible_weighted_point_clouds(context, meshes, armature) -> tuple[auto_match
     return tuple(clouds)
 
 
+def visible_source_weight_field(context, meshes, armature) -> auto_match_core.SourceWeightField | None:
+    """Sample evaluated visible source mesh vertices with all source bone weights."""
+
+    channel_names = _source_weight_channel_names(meshes, armature)
+    if not channel_names:
+        return None
+
+    depsgraph = context.evaluated_depsgraph_get()
+    channel_index_by_name = {name: index for index, name in enumerate(channel_names)}
+    points: list[tuple[float, float, float]] = []
+    influence_indices: list[tuple[int, ...]] = []
+    influence_weights: list[tuple[float, ...]] = []
+
+    for mesh_obj in meshes:
+        if mesh_obj is None or mesh_obj.type != "MESH":
+            continue
+        group_index_to_channel = {
+            group.index: channel_index_by_name[group.name]
+            for group in mesh_obj.vertex_groups
+            if group.name in channel_index_by_name
+        }
+        if not group_index_to_channel:
+            continue
+
+        evaluated_obj = mesh_obj.evaluated_get(depsgraph)
+        evaluated_mesh = _evaluated_mesh(evaluated_obj, depsgraph)
+        try:
+            mesh_world = evaluated_obj.matrix_world
+            for vertex in evaluated_mesh.vertices:
+                by_channel: dict[int, float] = {}
+                for group_ref in vertex.groups:
+                    channel_index = group_index_to_channel.get(group_ref.group)
+                    if channel_index is None or group_ref.weight <= WEIGHT_EPSILON:
+                        continue
+                    by_channel[channel_index] = max(float(group_ref.weight), by_channel.get(channel_index, 0.0))
+                if not by_channel:
+                    continue
+
+                ordered = tuple(sorted(by_channel.items()))
+                points.append(_point_tuple(mesh_world @ vertex.co))
+                influence_indices.append(tuple(index for index, _weight in ordered))
+                influence_weights.append(tuple(weight for _index, weight in ordered))
+        finally:
+            evaluated_obj.to_mesh_clear()
+
+    if not points:
+        return None
+
+    return auto_match_core.SourceWeightField(
+        channel_names=channel_names,
+        points=np.asarray(points, dtype=np.float64).reshape((-1, 3)),
+        influence_indices=tuple(influence_indices),
+        influence_weights=tuple(influence_weights),
+    )
+
+
 def visible_point_cloud_diag(clouds: tuple[auto_match_core.WeightedPointCloud, ...] | list[auto_match_core.WeightedPointCloud]) -> float:
     if not clouds:
         return 0.0
@@ -180,6 +236,22 @@ def visible_point_cloud_diag(clouds: tuple[auto_match_core.WeightedPointCloud, .
     bounds_min = np.min(merged, axis=0)
     bounds_max = np.max(merged, axis=0)
     return float(np.linalg.norm(bounds_max - bounds_min))
+
+
+def _source_weight_channel_names(meshes, armature) -> tuple[str, ...]:
+    bone_names = {bone.name for bone in armature.pose.bones}
+    weighted_group_names = {
+        group.name
+        for mesh_obj in meshes
+        if mesh_obj is not None and mesh_obj.type == "MESH"
+        for group in mesh_obj.vertex_groups
+        if group.name in bone_names
+    }
+    return tuple(
+        bone.name
+        for bone in armature.pose.bones
+        if bone.name in weighted_group_names
+    )
 
 
 def _evaluated_mesh(evaluated_obj, depsgraph):

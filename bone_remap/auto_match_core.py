@@ -58,6 +58,49 @@ class WeightedPointCloud:
 
 
 @dataclass(frozen=True)
+class SourceWeightField:
+    channel_names: tuple[str, ...]
+    points: np.ndarray
+    influence_indices: tuple[tuple[int, ...], ...]
+    influence_weights: tuple[tuple[float, ...], ...]
+
+    def __post_init__(self) -> None:
+        channel_names = tuple(str(name) for name in self.channel_names if str(name))
+        points = np.asarray(self.points, dtype=np.float64)
+        if not channel_names:
+            raise ValueError("source weight field needs at least one channel")
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise ValueError("source weight field points must have shape (N, 3)")
+        if len(self.influence_indices) != points.shape[0] or len(self.influence_weights) != points.shape[0]:
+            raise ValueError("source influence arrays must match point count")
+
+        max_channel_index = len(channel_names) - 1
+        prepared_indices = []
+        prepared_weights = []
+        for indices, weights in zip(self.influence_indices, self.influence_weights):
+            if len(indices) != len(weights):
+                raise ValueError("source influence index/weight lengths must match")
+            row_indices = []
+            row_weights = []
+            for index, weight in zip(indices, weights):
+                channel_index = int(index)
+                weight = float(weight)
+                if channel_index < 0 or channel_index > max_channel_index:
+                    raise ValueError("source influence channel index is out of range")
+                if weight <= WEIGHT_EPSILON:
+                    continue
+                row_indices.append(channel_index)
+                row_weights.append(weight)
+            prepared_indices.append(tuple(row_indices))
+            prepared_weights.append(tuple(row_weights))
+
+        object.__setattr__(self, "channel_names", channel_names)
+        object.__setattr__(self, "points", points)
+        object.__setattr__(self, "influence_indices", tuple(prepared_indices))
+        object.__setattr__(self, "influence_weights", tuple(prepared_weights))
+
+
+@dataclass(frozen=True)
 class Assignment:
     source_name: str
     target_names: tuple[str, ...]
@@ -130,6 +173,107 @@ def build_assignment_plan(
         )
 
     return AssignmentPlan(assignments=tuple(assignments))
+
+
+def build_projection_assignment_plan(
+    source_field: SourceWeightField,
+    target_clouds: Sequence[WeightedPointCloud],
+    *,
+    point_target: int = DEFAULT_POINT_TARGET,
+    seam_position_tolerance: float = DEFAULT_SEAM_POSITION_TOLERANCE,
+    seam_weight_tolerance: float = DEFAULT_SEAM_WEIGHT_TOLERANCE,
+    max_projection_distance: float | None = None,
+    min_winner_ratio: float = 0.0,
+    nearest_indices=None,
+) -> AssignmentPlan:
+    """Assign target channels by projecting target vertices onto source weights.
+
+    This reads target vertex groups as evidence and writes only mapping assignments.
+    It does not mutate target mesh weights.
+    """
+
+    if len(source_field.points) == 0:
+        return AssignmentPlan(assignments=())
+
+    target_clouds = build_target_seam_clusters(
+        target_clouds,
+        position_tolerance=seam_position_tolerance,
+        weight_tolerance=seam_weight_tolerance,
+    )
+    compressed_targets = tuple(
+        deterministic_point_cloud_compression(cloud, point_target=point_target)
+        for cloud in target_clouds
+        if _has_usable_points(cloud)
+    )
+    assignments: list[Assignment] = []
+    nearest_indices = nearest_indices or (lambda query_points: _nearest_source_indices_bruteforce(query_points, source_field.points))
+
+    for target in compressed_targets:
+        assignment = _project_target_cloud_to_source(
+            source_field,
+            target,
+            nearest_indices=nearest_indices,
+            max_projection_distance=max_projection_distance,
+            min_winner_ratio=min_winner_ratio,
+        )
+        if assignment is not None:
+            assignments.append(assignment)
+
+    return AssignmentPlan(assignments=tuple(assignments))
+
+
+def _project_target_cloud_to_source(
+    source_field: SourceWeightField,
+    target: WeightedPointCloud,
+    *,
+    nearest_indices,
+    max_projection_distance: float | None,
+    min_winner_ratio: float,
+) -> Assignment | None:
+    positive = target.weights > WEIGHT_EPSILON
+    if not bool(np.any(positive)):
+        return None
+
+    query_points = target.points[positive]
+    query_weights = target.weights[positive]
+    source_indices = np.asarray(nearest_indices(query_points), dtype=np.intp)
+    if source_indices.shape[0] != query_points.shape[0]:
+        raise ValueError("nearest_indices must return one source index per query point")
+
+    scores = np.zeros(len(source_field.channel_names), dtype=np.float64)
+    for query_point, target_weight, source_index in zip(query_points, query_weights, source_indices):
+        source_index = int(source_index)
+        if source_index < 0 or source_index >= len(source_field.points):
+            continue
+        if max_projection_distance is not None:
+            delta = query_point - source_field.points[source_index]
+            if float(np.dot(delta, delta)) > float(max_projection_distance) * float(max_projection_distance):
+                continue
+        for channel_index, source_weight in zip(
+            source_field.influence_indices[source_index],
+            source_field.influence_weights[source_index],
+        ):
+            scores[int(channel_index)] += float(target_weight) * float(source_weight)
+
+    best_index = int(np.argmax(scores)) if len(scores) else -1
+    if best_index < 0:
+        return None
+    best_score = float(scores[best_index])
+    if best_score <= WEIGHT_EPSILON:
+        return None
+
+    total_score = float(np.sum(scores))
+    if total_score <= WEIGHT_EPSILON:
+        return None
+    winner_ratio = best_score / total_score
+    if winner_ratio < float(min_winner_ratio):
+        return None
+
+    return Assignment(
+        source_name=source_field.channel_names[best_index],
+        target_names=target.channel_names,
+        score=winner_ratio,
+    )
 
 
 def build_target_seam_clusters(
@@ -438,6 +582,24 @@ def _nearest_distance(
     if best > float(tolerance) * float(tolerance):
         return None
     return best ** 0.5
+
+
+def _nearest_source_indices_bruteforce(query_points: np.ndarray, source_points: np.ndarray) -> np.ndarray:
+    if len(query_points) == 0:
+        return np.asarray([], dtype=np.intp)
+    if len(source_points) == 0:
+        return np.full(len(query_points), -1, dtype=np.intp)
+
+    query_points = np.asarray(query_points, dtype=np.float64)
+    source_points = np.asarray(source_points, dtype=np.float64)
+    chunk_size = max(1, MAX_VECTORIZED_DISTANCE_PAIRS // max(1, len(source_points)))
+    nearest_indices = np.empty(len(query_points), dtype=np.intp)
+    for start in range(0, len(query_points), chunk_size):
+        stop = min(len(query_points), start + chunk_size)
+        deltas = query_points[start:stop, np.newaxis, :] - source_points[np.newaxis, :, :]
+        distances_squared = np.einsum("ijk,ijk->ij", deltas, deltas)
+        nearest_indices[start:stop] = np.argmin(distances_squared, axis=1)
+    return nearest_indices
 
 
 def _build_spatial_hash(points: np.ndarray, cell_size: float) -> dict[tuple[int, int, int], np.ndarray]:

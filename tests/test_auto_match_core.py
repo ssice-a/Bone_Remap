@@ -33,6 +33,15 @@ def cloud(name: str, points, weights, channels=None, seam_ids=None):
     )
 
 
+def source_field(channel_names, points, influences):
+    return core.SourceWeightField(
+        channel_names=tuple(channel_names),
+        points=np.asarray(points, dtype=np.float64),
+        influence_indices=tuple(tuple(index for index, _weight in row) for row in influences),
+        influence_weights=tuple(tuple(weight for _index, weight in row) for row in influences),
+    )
+
+
 class AutoMatchCoreTests(unittest.TestCase):
     def test_assignment_plan_uses_visible_space_weighted_point_clouds(self):
         sources = (
@@ -199,6 +208,51 @@ class AutoMatchCoreTests(unittest.TestCase):
         plan = core.build_assignment_plan(tuple(sources), (target,), max_score=1.0)
 
         self.assertEqual(plan.assignments[0].source_name, "Source39")
+
+    def test_projection_assignment_uses_source_weights_at_overlapping_target_vertices(self):
+        source = source_field(
+            ("Shoulder", "UpperArm"),
+            [(0.0, 0.0, 0.0), (0.2, 0.0, 0.0), (1.0, 0.0, 0.0)],
+            (
+                ((0, 0.9), (1, 0.1)),
+                ((0, 0.8), (1, 0.2)),
+                ((0, 0.1), (1, 0.9)),
+            ),
+        )
+        targets = (
+            cloud("TargetShoulderPiece", [(0.0, 0.0, 0.0), (0.2, 0.0, 0.0)], [1.0, 1.0]),
+            cloud("TargetArmPiece", [(1.0, 0.0, 0.0)], [1.0]),
+        )
+
+        plan = core.build_projection_assignment_plan(source, targets)
+
+        self.assertEqual(
+            [(assignment.source_name, assignment.target_names) for assignment in plan.assignments],
+            [
+                ("Shoulder", ("TargetShoulderPiece",)),
+                ("UpperArm", ("TargetArmPiece",)),
+            ],
+        )
+
+    def test_projection_assignment_keeps_target_seam_pieces_together(self):
+        source = source_field(
+            ("Neck", "Head"),
+            [(0.0, 0.0, 1.0), (0.0, 0.0, 1.2)],
+            (
+                ((0, 0.85), (1, 0.15)),
+                ((0, 0.2), (1, 0.8)),
+            ),
+        )
+        targets = (
+            cloud("NeckSeamA", [(0.0, 0.0, 1.0)], [1.0], seam_ids=(("mesh_a", 7),)),
+            cloud("NeckSeamB", [(0.0, 0.0, 1.0)], [1.0], seam_ids=(("mesh_b", 9),)),
+        )
+
+        plan = core.build_projection_assignment_plan(source, targets)
+
+        self.assertEqual(len(plan.assignments), 1)
+        self.assertEqual(plan.assignments[0].source_name, "Neck")
+        self.assertEqual(plan.assignments[0].target_names, ("NeckSeamA", "NeckSeamB"))
 
 
 if __name__ == "__main__":

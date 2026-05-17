@@ -6,6 +6,8 @@ from time import perf_counter
 
 import bpy
 from bpy.types import Operator
+from mathutils.kdtree import KDTree
+import numpy as np
 
 from . import auto_match_core, mapping, runtime_plan, state, weighted_geometry
 from .registration import register_classes, unregister_classes
@@ -27,25 +29,16 @@ def auto_match_active_profile(context) -> tuple[int, str]:
         return 0, "Auto Match Mesh Scope needs source and target meshes."
 
     source_started_at = perf_counter()
-    source_clouds = weighted_geometry.visible_weighted_point_clouds(
+    source_field = weighted_geometry.visible_source_weight_field(
         context,
         source_meshes,
         active_context.source_armature,
     )
     source_seconds = perf_counter() - source_started_at
-    if not source_clouds:
-        return 0, "No usable source weighted point clouds with exact bone-name vertex groups."
+    if source_field is None:
+        return 0, "No usable source vertex weights with exact bone-name vertex groups."
 
-    was_live_enabled, clear_error = _pause_and_clear_live_preview_for_target_sampling(
-        context,
-        profile,
-        active_context.target_armature,
-    )
-    if clear_error is not None:
-        if was_live_enabled:
-            profile.live_preview_enabled = True
-        return 0, clear_error
-
+    was_live_enabled = _pause_live_preview_for_target_sampling(profile)
     try:
         target_started_at = perf_counter()
         target_clouds = weighted_geometry.visible_weighted_point_clouds(
@@ -61,12 +54,12 @@ def auto_match_active_profile(context) -> tuple[int, str]:
     if not target_clouds:
         return 0, "No usable target weighted point clouds with exact bone-name vertex groups."
 
-    candidate_gap = _candidate_gap(source_clouds, target_clouds)
     plan_started_at = perf_counter()
-    plan = auto_match_core.build_assignment_plan(
-        source_clouds,
+    plan = auto_match_core.build_projection_assignment_plan(
+        source_field,
         target_clouds,
-        candidate_max_gap=candidate_gap,
+        max_projection_distance=_projection_max_distance(source_field, target_clouds),
+        nearest_indices=_nearest_indices_for_source_field(source_field),
     )
     plan_seconds = perf_counter() - plan_started_at
     apply_started_at = perf_counter()
@@ -158,21 +151,41 @@ def _candidate_gap(
     return max(MIN_SCORE_LIMIT, float(diag) * CANDIDATE_GAP_RATIO)
 
 
-def _pause_and_clear_live_preview_for_target_sampling(context, profile, target_armature) -> tuple[bool, str | None]:
-    from . import live_preview
+def _projection_max_distance(
+    source_field: auto_match_core.SourceWeightField,
+    target_clouds: tuple[auto_match_core.WeightedPointCloud, ...],
+) -> float:
+    point_sets = [source_field.points]
+    point_sets.extend(cloud.points for cloud in target_clouds if len(cloud.points))
+    if not point_sets:
+        return MIN_SCORE_LIMIT
+    points = np.vstack(point_sets)
+    bounds_min = np.min(points, axis=0)
+    bounds_max = np.max(points, axis=0)
+    diag = float(np.linalg.norm(bounds_max - bounds_min))
+    return max(MIN_SCORE_LIMIT, diag * CANDIDATE_GAP_RATIO)
 
+
+def _nearest_indices_for_source_field(source_field: auto_match_core.SourceWeightField):
+    kd_tree = KDTree(len(source_field.points))
+    for index, point in enumerate(source_field.points):
+        kd_tree.insert(tuple(float(value) for value in point), int(index))
+    kd_tree.balance()
+
+    def nearest_indices(query_points):
+        return [
+            int(kd_tree.find(tuple(float(value) for value in point))[1])
+            for point in query_points
+        ]
+
+    return nearest_indices
+
+
+def _pause_live_preview_for_target_sampling(profile) -> bool:
     was_enabled = bool(profile.live_preview_enabled)
     if was_enabled:
         profile.live_preview_enabled = False
-    if len(profile.live_preview_last_written_targets) == 0:
-        return was_enabled, None
-    reset_count, messages = live_preview.clear_live_preview(context, profile, target_armature)
-    errors = [message.text for message in messages if message.severity == "ERROR"]
-    if errors:
-        return was_enabled, errors[0]
-    if reset_count:
-        context.view_layer.update()
-    return was_enabled, None
+    return was_enabled
 
 
 def _solve_live_preview_if_enabled(context) -> None:

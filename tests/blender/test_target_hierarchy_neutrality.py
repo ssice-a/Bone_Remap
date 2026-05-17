@@ -16,7 +16,7 @@ import bpy
 from mathutils import Matrix
 
 import bone_remap
-from bone_remap import bake, solver, state, work_pose
+from bone_remap import auto_map, bake, mapping, solver, state, work_pose
 
 
 EPSILON = 1.0e-5
@@ -46,7 +46,10 @@ def main() -> None:
         test_add_weighted_source_rows_uses_bound_mesh_vertex_groups()
         test_auto_match_visible_meshes_uses_shared_weighted_geometry()
         test_auto_match_visible_meshes_replaces_stale_mapping_rows()
-        test_mapping_row_activation_highlights_owned_target_bones()
+        test_auto_match_pauses_live_preview_without_clearing_visible_target_pose()
+        test_target_selection_syncs_active_source_row()
+        test_assign_selected_targets_to_active_source_preserves_target_selection_after_source_row_click()
+        test_mapping_row_activation_sets_active_source_without_stealing_target_selection()
         test_target_link_activation_highlights_one_target_bone()
         test_live_solve_writes_same_visible_target_matrices_for_flat_and_parented_targets()
         test_clear_live_preview_resets_parented_target_to_bind_matrices()
@@ -649,19 +652,85 @@ def test_auto_match_visible_meshes_replaces_stale_mapping_rows() -> None:
     }
 
 
-def test_mapping_row_activation_highlights_owned_target_bones() -> None:
+def test_auto_match_pauses_live_preview_without_clearing_visible_target_pose() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("AutoMapPauseSource", source_names())
+    target = create_two_bone_armature("AutoMapPauseTarget", target_names())
+    profile = create_profile("AutoMapPauseProfile", source, target)
+    profile.live_preview_enabled = True
+    written = profile.live_preview_last_written_targets.add()
+    written.target_bone_name = "TargetRoot"
+
+    from bone_remap import live_preview
+
+    clear_calls = []
+    original_clear = live_preview.clear_live_preview
+    live_preview.clear_live_preview = lambda *args, **kwargs: clear_calls.append((args, kwargs)) or (0, [])
+    try:
+        was_enabled = auto_map._pause_live_preview_for_target_sampling(profile)
+    finally:
+        live_preview.clear_live_preview = original_clear
+
+    assert was_enabled is True
+    assert profile.live_preview_enabled is False
+    assert clear_calls == []
+
+
+def test_target_selection_syncs_active_source_row() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("TargetSelectionSource", source_names())
+    target = create_two_bone_armature("TargetSelectionTarget", target_names())
+    profile = create_profile("TargetSelectionProfile", source, target)
+
+    mapping.activate_armature_and_select_pose_bones(bpy.context, target, ["TargetChild"])
+    mapping.sync_mapping_from_selection(bpy.context)
+
+    assert profile.active_mapping_row_index == 1
+    assert profile.mapping_rows[1].source_bone_name == "SourceChild"
+    assert profile.mapping_rows[1].active_target_link_index == 0
+
+
+def test_assign_selected_targets_to_active_source_preserves_target_selection_after_source_row_click() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("MoveTargetSource", source_names())
+    target = create_two_bone_armature("MoveTargetTarget", target_names())
+    profile = create_profile("MoveTargetProfile", source, target)
+
+    mapping.activate_armature_and_select_pose_bones(bpy.context, target, ["TargetChild"])
+    mapping.sync_mapping_from_selection(bpy.context)
+    assert profile.active_mapping_row_index == 1
+
+    assert bpy.ops.bone_remap.mapping_activate_source_row(mapping_index=0) == {"FINISHED"}
+    mapping.sync_mapping_from_selection(bpy.context)
+    assert profile.active_mapping_row_index == 0
+    assert selected_pose_bone_names(target) == ["TargetChild"]
+
+    assert bpy.ops.bone_remap.mapping_assign_selected_targets() == {"FINISHED"}
+    owner_index, owner = mapping.find_owner_row(profile, "TargetChild")
+
+    assert owner_index == 0
+    assert owner.source_bone_name == "SourceRoot"
+    assert [link.target_bone_name for link in profile.mapping_rows[0].target_links] == ["TargetRoot", "TargetChild"]
+    assert [link.target_bone_name for link in profile.mapping_rows[1].target_links] == []
+
+
+def test_mapping_row_activation_sets_active_source_without_stealing_target_selection() -> None:
     clear_scene()
 
     source = create_two_bone_armature("HighlightSource", source_names())
     target = create_two_bone_armature("HighlightTarget", target_names())
     profile = create_profile("HighlightProfile", source, target)
+    mapping.activate_armature_and_select_pose_bones(bpy.context, target, ["TargetChild"])
 
     result = bpy.ops.bone_remap.mapping_activate_source_row(mapping_index=0)
 
     assert result == {"FINISHED"}
     assert bpy.context.object == target
-    assert selected_pose_bone_names(target) == ["TargetRoot"]
-    assert target.data.bones.active == target.data.bones["TargetRoot"]
+    assert selected_pose_bone_names(target) == ["TargetChild"]
+    assert target.data.bones.active == target.data.bones["TargetChild"]
     assert profile.active_mapping_row_index == 0
 
 

@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import bpy
+from bpy.app.handlers import persistent
 from bpy.types import Object, Operator
 
 from . import runtime_plan, state, weighted_geometry
 from .registration import register_classes, unregister_classes
+
+
+_LAST_SELECTION_SIGNATURE = None
+_LAST_TARGET_SELECTION_BY_PROFILE: dict[tuple[int, int], tuple[str, ...]] = {}
 
 
 def get_active_mapping_row(profile):
@@ -35,6 +40,13 @@ def find_owner_row(profile, target_bone_name: str):
         if any(link.target_bone_name == target_bone_name for link in row.target_links):
             return index, row
     return -1, None
+
+
+def find_target_link_index(row, target_bone_name: str) -> int:
+    for index, link in enumerate(row.target_links):
+        if link.target_bone_name == target_bone_name:
+            return index
+    return -1
 
 
 def row_target_bone_names(row) -> list[str]:
@@ -107,8 +119,22 @@ def selected_bone_names(context, armature: Object) -> list[str]:
         if active_pose_bone is not None:
             names.append(active_pose_bone.name)
 
-    names.extend(bone.name for bone in armature.data.bones if bone.select)
+    names.extend(bone.name for bone in armature.data.bones if getattr(bone, "select", False))
     return _unique_names(names)
+
+
+def sync_mapping_from_selection(context=None) -> bool:
+    context = context or bpy.context
+    active_context = state.get_active_profile_context(context.scene)
+    if active_context is None:
+        return False
+
+    active_object = context.view_layer.objects.active
+    if active_object == active_context.source_armature and context.mode == "POSE":
+        return _sync_active_source_from_selection(context, active_context.profile, active_context.source_armature)
+    if active_object == active_context.target_armature and context.mode == "POSE":
+        return _sync_active_source_from_target_selection(context, active_context.profile, active_context.target_armature)
+    return False
 
 
 def weighted_source_bone_names(scene, source_armature: Object) -> list[str]:
@@ -130,6 +156,10 @@ def active_or_selected_bone_name(context, armature: Object) -> str | None:
 
     selected = selected_bone_names(context, armature)
     return selected[0] if selected else None
+
+
+def last_selected_target_bone_names(profile, target_armature: Object) -> tuple[str, ...]:
+    return _LAST_TARGET_SELECTION_BY_PROFILE.get(_target_selection_cache_key(profile, target_armature), ())
 
 
 def activate_armature_and_select_pose_bones(
@@ -252,6 +282,96 @@ def _unique_names(names: list[str]) -> list[str]:
     return unique
 
 
+def _sync_active_source_from_selection(context, profile, source_armature: Object) -> bool:
+    source_bone_name = active_or_selected_bone_name(context, source_armature)
+    signature = _selection_signature(profile, source_armature, "SOURCE", source_bone_name, selected_bone_names(context, source_armature))
+    if _selection_seen(signature):
+        return False
+
+    if source_bone_name is None:
+        return False
+    row_index = find_row_index_by_source(profile, source_bone_name)
+    if row_index < 0:
+        return False
+    if profile.active_mapping_row_index == row_index:
+        return False
+    set_active_mapping_row_index(profile, row_index)
+    return True
+
+
+def _sync_active_source_from_target_selection(context, profile, target_armature: Object) -> bool:
+    target_bone_names = tuple(selected_bone_names(context, target_armature))
+    target_bone_name = active_or_selected_bone_name(context, target_armature)
+    signature = _selection_signature(profile, target_armature, "TARGET", target_bone_name, target_bone_names)
+    if _selection_seen(signature):
+        return False
+
+    if target_bone_names:
+        _LAST_TARGET_SELECTION_BY_PROFILE[_target_selection_cache_key(profile, target_armature)] = target_bone_names
+    if target_bone_name is None:
+        return False
+
+    owner_index, owner = find_owner_row(profile, target_bone_name)
+    if owner is None:
+        return False
+
+    target_link_index = find_target_link_index(owner, target_bone_name)
+    if target_link_index >= 0:
+        owner.active_target_link_index = target_link_index
+
+    if profile.active_mapping_row_index == owner_index:
+        return False
+    set_active_mapping_row_index(profile, owner_index)
+    return True
+
+
+def _remember_target_selection_signature(context, profile, target_armature: Object) -> None:
+    target_bone_names = tuple(selected_bone_names(context, target_armature))
+    if not target_bone_names:
+        return
+    _LAST_TARGET_SELECTION_BY_PROFILE[_target_selection_cache_key(profile, target_armature)] = target_bone_names
+
+    target_bone_name = active_or_selected_bone_name(context, target_armature)
+    global _LAST_SELECTION_SIGNATURE
+    _LAST_SELECTION_SIGNATURE = _selection_signature(
+        profile,
+        target_armature,
+        "TARGET",
+        target_bone_name,
+        target_bone_names,
+    )
+
+
+def _selection_seen(signature) -> bool:
+    global _LAST_SELECTION_SIGNATURE
+    if signature == _LAST_SELECTION_SIGNATURE:
+        return True
+    _LAST_SELECTION_SIGNATURE = signature
+    return False
+
+
+def _selection_signature(profile, armature: Object, scope: str, active_bone_name: str | None, selected_bone_names_: tuple[str, ...] | list[str]):
+    return (
+        profile.as_pointer(),
+        armature.as_pointer(),
+        scope,
+        active_bone_name or "",
+        tuple(selected_bone_names_),
+    )
+
+
+def _target_selection_cache_key(profile, target_armature: Object) -> tuple[int, int]:
+    return profile.as_pointer(), target_armature.as_pointer()
+
+
+@persistent
+def _mapping_selection_sync_post(_scene, _depsgraph):
+    try:
+        sync_mapping_from_selection(bpy.context)
+    except Exception:
+        return
+
+
 class BRM_OT_mapping_add_source_rows(Operator):
     bl_idname = "bone_remap.mapping_add_source_rows"
     bl_label = "Add Source Rows"
@@ -276,7 +396,7 @@ class BRM_OT_mapping_add_source_rows(Operator):
             _row, was_created = ensure_mapping_row(profile, source_bone_name)
             created += int(was_created)
 
-        _solve_live_preview_if_enabled(context, reason="mapping_source_rows_changed")
+        _refresh_after_mapping_change(context, reason="mapping_source_rows_changed")
         self.report({"INFO"}, f"Added {created} source rows; selected {len(source_bone_names)} source bones.")
         return {"FINISHED"}
 
@@ -308,7 +428,7 @@ class BRM_OT_mapping_add_weighted_source_rows(Operator):
             _row, was_created = ensure_mapping_row(profile, source_bone_name)
             created += int(was_created)
 
-        _solve_live_preview_if_enabled(context, reason="mapping_weighted_source_rows_added")
+        _refresh_after_mapping_change(context, reason="mapping_weighted_source_rows_added")
         self.report({"INFO"}, f"Added {created} weighted source rows; found {len(source_bone_names)} weighted source bones.")
         return {"FINISHED"}
 
@@ -338,7 +458,7 @@ class BRM_OT_mapping_remove_active_source_row(Operator):
         runtime_plan.invalidate_runtime_plan(profile)
 
         cleanup_count = _cleanup_removed_targets(context, profile, target, removed_targets)
-        _solve_live_preview_if_enabled(context, reason="mapping_source_row_removed")
+        _refresh_after_mapping_change(context, reason="mapping_source_row_removed")
         self.report({"INFO"}, f"Removed {source_bone_name}; cleaned {cleanup_count} target channels.")
         return {"FINISHED"}
 
@@ -361,8 +481,8 @@ class BRM_OT_mapping_activate_source_row(Operator):
 
         set_active_mapping_row_index(profile, self.mapping_index)
         row = profile.mapping_rows[self.mapping_index]
-        selected_count = activate_armature_and_select_pose_bones(context, target, row_target_bone_names(row))
-        self.report({"INFO"}, f"{row.source_bone_name}: highlighted {selected_count} target bones.")
+        _remember_target_selection_signature(context, profile, target)
+        self.report({"INFO"}, f"Active Source Row: {row.source_bone_name}.")
         return {"FINISHED"}
 
 
@@ -397,8 +517,8 @@ class BRM_OT_mapping_activate_target_link(Operator):
 
 class BRM_OT_mapping_assign_selected_targets(Operator):
     bl_idname = "bone_remap.mapping_assign_selected_targets"
-    bl_label = "Assign Selected Targets"
-    bl_description = "Assign selected Target Armature bones to the Destination Source Row"
+    bl_label = "Assign To Active Source"
+    bl_description = "Move selected Target Armature bones to the active Source Row"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -414,12 +534,14 @@ class BRM_OT_mapping_assign_selected_targets(Operator):
 
         target_bone_names = selected_bone_names(context, target)
         if not target_bone_names:
+            target_bone_names = list(last_selected_target_bone_names(profile, target))
+        if not target_bone_names:
             self.report({"ERROR"}, "Select one or more bones on the Target Armature.")
             return {"CANCELLED"}
 
         valid_target_names = [name for name in target_bone_names if name in target.pose.bones]
         assigned, moved = assign_targets_to_row(profile, row, valid_target_names)
-        _solve_live_preview_if_enabled(context, reason="mapping_targets_assigned")
+        _refresh_after_mapping_change(context, reason="mapping_targets_assigned")
         self.report({"INFO"}, f"Assigned {assigned} targets to {row.source_bone_name}; moved {moved}.")
         return {"FINISHED"}
 
@@ -452,14 +574,14 @@ class BRM_OT_mapping_remove_active_target_link(Operator):
         runtime_plan.invalidate_runtime_plan(profile)
 
         cleanup_count = _cleanup_removed_targets(context, profile, target, [target_bone_name])
-        _solve_live_preview_if_enabled(context, reason="mapping_target_link_removed")
+        _refresh_after_mapping_change(context, reason="mapping_target_link_removed")
         self.report({"INFO"}, f"Removed {target_bone_name}; cleaned {cleanup_count} target channels.")
         return {"FINISHED"}
 
 
 class BRM_OT_mapping_unassign_selected_targets(Operator):
     bl_idname = "bone_remap.mapping_unassign_selected_targets"
-    bl_label = "Unassign Selected Targets"
+    bl_label = "Remove Selected Targets"
     bl_description = "Remove selected Target Armature bones from the Mapping Table and clean channels that leave it"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -470,6 +592,8 @@ class BRM_OT_mapping_unassign_selected_targets(Operator):
             return {"CANCELLED"}
 
         target_bone_names = selected_bone_names(context, target)
+        if not target_bone_names:
+            target_bone_names = list(last_selected_target_bone_names(profile, target))
         if not target_bone_names:
             self.report({"ERROR"}, "Select one or more bones on the Target Armature.")
             return {"CANCELLED"}
@@ -487,7 +611,7 @@ class BRM_OT_mapping_unassign_selected_targets(Operator):
             runtime_plan.invalidate_runtime_plan(profile)
 
         cleanup_count = _cleanup_removed_targets(context, profile, target, removed_targets)
-        _solve_live_preview_if_enabled(context, reason="mapping_targets_unassigned")
+        _refresh_after_mapping_change(context, reason="mapping_targets_unassigned")
         self.report({"INFO"}, f"Unassigned {removed} target links; cleaned {cleanup_count} target channels.")
         return {"FINISHED"}
 
@@ -590,19 +714,43 @@ _CLASSES = (
 
 def register():
     register_classes(_CLASSES)
+    _append_once(bpy.app.handlers.depsgraph_update_post, _mapping_selection_sync_post)
 
 
 def unregister():
+    _remove_if_present(bpy.app.handlers.depsgraph_update_post, _mapping_selection_sync_post)
     unregister_classes(_CLASSES)
+    _LAST_TARGET_SELECTION_BY_PROFILE.clear()
 
 
-def _solve_live_preview_if_enabled(context, reason: str) -> None:
+def _refresh_after_mapping_change(context, reason: str) -> None:
     from . import live_preview
 
-    live_preview.solve_if_enabled(context, reason=reason)
+    live_preview.solve_if_enabled(context, reason=reason, update_view_layer=True)
+    context.view_layer.update()
+    _tag_redraw(context)
 
 
 def _cleanup_removed_targets(context, profile, target_armature: Object, target_bone_names: list[str]) -> int:
     from . import live_preview
 
     return live_preview.cleanup_removed_target_links(context, profile, target_armature, target_bone_names)
+
+
+def _tag_redraw(context) -> None:
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return
+    for area in screen.areas:
+        if area.type in {"VIEW_3D", "PROPERTIES"}:
+            area.tag_redraw()
+
+
+def _append_once(handler_list, handler) -> None:
+    if handler not in handler_list:
+        handler_list.append(handler)
+
+
+def _remove_if_present(handler_list, handler) -> None:
+    while handler in handler_list:
+        handler_list.remove(handler)
