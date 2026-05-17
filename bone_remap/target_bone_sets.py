@@ -12,9 +12,17 @@ BASE_BONE_COLLECTION_NAME = "BRM Base Bones"
 MAPPED_TARGET_COLLECTION_NAME = "BRM Mapped Targets"
 PHYSICS_TARGET_COLLECTION_NAME = "BRM Physics Targets"
 MAPPED_TARGET_PALETTE = "THEME04"
-PHYSICS_TARGET_PALETTE = "THEME09"
+PHYSICS_TARGET_PALETTE = "CUSTOM"
+PHYSICS_TARGET_COLORS = {
+    "normal": (0.55, 0.36, 0.02),
+    "select": (0.78, 0.50, 0.04),
+    "active": (0.95, 0.68, 0.12),
+}
 _COLOR_TAG_PROP = "_brm_color_tag"
 _PREVIOUS_COLOR_PROP = "_brm_previous_color_palette"
+_PREVIOUS_CUSTOM_NORMAL_PROP = "_brm_previous_custom_normal"
+_PREVIOUS_CUSTOM_SELECT_PROP = "_brm_previous_custom_select"
+_PREVIOUS_CUSTOM_ACTIVE_PROP = "_brm_previous_custom_active"
 
 
 def replace_mesh_target_sets(target_armature: Object, assignments_by_mesh: dict[str, list[str]]) -> int:
@@ -162,7 +170,7 @@ def _sync_target_colors(target: Object, highlight_enabled: bool) -> None:
     highlighted_names = mapped_names | physics_names
     for pose_bone in target.pose.bones:
         if pose_bone.name in physics_names:
-            _set_brm_color(pose_bone, PHYSICS_TARGET_PALETTE, "PHYSICS")
+            _set_brm_color(pose_bone, PHYSICS_TARGET_PALETTE, "PHYSICS", PHYSICS_TARGET_COLORS)
         elif pose_bone.name in mapped_names:
             _set_brm_color(pose_bone, MAPPED_TARGET_PALETTE, "MAPPED")
         elif pose_bone.name not in highlighted_names and pose_bone.get(_COLOR_TAG_PROP):
@@ -178,10 +186,18 @@ def _collection_bone_names(target: Object | None, collection_name: str) -> set[s
     return {bone.name for bone in collection.bones}
 
 
-def _set_brm_color(pose_bone, palette: str, tag: str) -> None:
+def _set_brm_color(pose_bone, palette: str, tag: str, custom_colors: dict[str, tuple[float, float, float]] | None = None) -> None:
     if not pose_bone.get(_COLOR_TAG_PROP):
         pose_bone[_PREVIOUS_COLOR_PROP] = pose_bone.color.palette
+        if pose_bone.color.palette == "CUSTOM":
+            pose_bone[_PREVIOUS_CUSTOM_NORMAL_PROP] = tuple(pose_bone.color.custom.normal)
+            pose_bone[_PREVIOUS_CUSTOM_SELECT_PROP] = tuple(pose_bone.color.custom.select)
+            pose_bone[_PREVIOUS_CUSTOM_ACTIVE_PROP] = tuple(pose_bone.color.custom.active)
     pose_bone.color.palette = palette
+    if custom_colors is not None:
+        pose_bone.color.custom.normal = custom_colors["normal"]
+        pose_bone.color.custom.select = custom_colors["select"]
+        pose_bone.color.custom.active = custom_colors["active"]
     pose_bone[_COLOR_TAG_PROP] = tag
 
 
@@ -197,7 +213,20 @@ def _restore_bone_color(pose_bone) -> None:
         pose_bone.color.palette = previous
     except TypeError:
         pose_bone.color.palette = "DEFAULT"
+    if previous == "CUSTOM":
+        _restore_custom_color_channel(pose_bone, "normal", _PREVIOUS_CUSTOM_NORMAL_PROP)
+        _restore_custom_color_channel(pose_bone, "select", _PREVIOUS_CUSTOM_SELECT_PROP)
+        _restore_custom_color_channel(pose_bone, "active", _PREVIOUS_CUSTOM_ACTIVE_PROP)
     if _COLOR_TAG_PROP in pose_bone:
         del pose_bone[_COLOR_TAG_PROP]
     if _PREVIOUS_COLOR_PROP in pose_bone:
         del pose_bone[_PREVIOUS_COLOR_PROP]
+    for prop_name in (_PREVIOUS_CUSTOM_NORMAL_PROP, _PREVIOUS_CUSTOM_SELECT_PROP, _PREVIOUS_CUSTOM_ACTIVE_PROP):
+        if prop_name in pose_bone:
+            del pose_bone[prop_name]
+
+
+def _restore_custom_color_channel(pose_bone, channel_name: str, prop_name: str) -> None:
+    if prop_name not in pose_bone:
+        return
+    setattr(pose_bone.color.custom, channel_name, tuple(pose_bone[prop_name]))

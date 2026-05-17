@@ -297,6 +297,12 @@ def _draw_bone_binding_box(layout, profile) -> None:
     mesh_row = binding_box.row(align=True)
     mesh_row.operator("bone_remap.group_target_bones_by_mesh", text="Group By Mesh", icon="MESH_DATA")
 
+    options = binding_box.row(align=True)
+    options.prop(profile, "bone_binding_place_chain_from_weights", text="Place")
+    options.prop(profile, "bone_binding_connect_chain", text="Connect")
+    options.prop(profile, "bone_binding_correct_roll", text="Roll")
+    binding_box.operator("bone_remap.build_selected_physics_chain", text="Build Selected Physics Chain", icon="CONSTRAINT_BONE")
+
     physics_row = binding_box.row(align=True)
     physics_row.operator("bone_remap.mark_selected_target_chain_as_physics", text="Mark Chain", icon="ADD")
     physics_row.operator("bone_remap.unmark_selected_target_chain_as_physics", text="Unmark", icon="REMOVE")

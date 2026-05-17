@@ -295,6 +295,21 @@ class BRM_RetargetProfile(PropertyGroup):
         default=False,
         update=sync_bone_binding_highlight,
     )
+    bone_binding_place_chain_from_weights: BoolProperty(
+        name="Place Bones From Weights",
+        description="Place selected physics-chain edit bones from same-name target vertex-group weight centers",
+        default=True,
+    )
+    bone_binding_connect_chain: BoolProperty(
+        name="Connect Chain",
+        description="Connect selected physics-chain bones internally by setting each child head to the parent tail",
+        default=True,
+    )
+    bone_binding_correct_roll: BoolProperty(
+        name="Correct Roll",
+        description="Align selected physics-chain bone roll to a stable target-armature-space reference",
+        default=True,
+    )
     active_motion_action: PointerProperty(
         name="Active Motion Action",
         description="Source-side Motion Action used for playback, editing, live retargeting, and Bake defaults",

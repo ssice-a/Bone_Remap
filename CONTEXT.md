@@ -260,6 +260,14 @@ _Avoid_: Manual target selection, saved preset-only list, runtime solve output
 The user-authored **Target Bone Set** for target-side channels that should be excluded from **Auto Match Visible Meshes** and removed from the **Mapping Table** so external or later physics workflows can own them.
 _Avoid_: Source physics bone, automatic semantic detector, hidden fallback mapping
 
+**Physics Chain Build**:
+The **Bone Binding Workbench** operation that turns the selected target **Deform Channels** into one parented physics chain using the active selected target bone as the chain head.
+_Avoid_: Multi-chain builder, attachment workflow, physics simulation, source retarget rule, Auto Match
+
+**Weight-Center Chain Placement**:
+The optional **Physics Chain Build** placement rule where each selected bone's weighted target-region center becomes the middle of its bone segment, and adjacent centers define head/tail joints.
+_Avoid_: Placing bone heads on maximum-weight points, mesh volume center, source-bone placement, target calibration
+
 **Mesh Target Set**:
 A **Target Bone Set** derived from bound target mesh vertex groups so users can inspect which **Deform Channels** belong to each target mesh object.
 _Avoid_: Auto Match Mesh Scope, mesh selection, required solve input
@@ -714,6 +722,18 @@ _Avoid_: Per-target weighted follow, per-target driver rule
 - **Mapped Target Set** is derived from the current **Mapping Table** and refreshed after mapping edits.
 - **Physics Target Set** is user-authored and persists independently from **Mapped Target Set**.
 - Marking target channels as **Physics Target Set** members removes those channels from the **Mapping Table** and runs **Removed Target Link Cleanup**.
+- **Physics Chain Build** only processes the currently selected target **Deform Channels**.
+- **Physics Chain Build** requires the active selected target bone to be the chain head.
+- **Physics Chain Build** builds one chain at a time; users split multi-chain or branching selections before running it.
+- Small fragmented weighted parts are not automatically absorbed into a **Physics Chain Build** path.
+- Small fragmented physics parts may be marked as **Physics Target Set** members without being rebuilt as internal chain bones.
+- Branching physics structures are represented as multiple one-dimensional chains sharing or attaching to external parents; **Physics Chain Build** does not create branching trees.
+- **Physics Chain Build** may use existing selected-bone parent relationships when they already form one path from the active chain head.
+- If no valid selected-bone parent path exists, **Physics Chain Build** may order selected bones by nearest **Weight-Center Chain Placement** points.
+- **Weight-Center Chain Placement** requires every selected target **Deform Channel** to have same-name non-zero target mesh weights; missing weights fail the command instead of falling back silently.
+- **Weight-Center Chain Placement** places bone segments so each target weighted-region center lies near the middle of its segment.
+- **Physics Chain Build** may connect internal selected bones and correct roll, but it does not connect to unselected external parents automatically.
+- **Physics Chain Build** adds the processed target channels to **Physics Target Set** and removes them from the **Mapping Table**.
 - Explicit **Target Assignment Operation** wins over **Physics Target Set** membership: assigning a target channel to a **Mapping Row** removes that channel from **Physics Target Set**.
 - **Auto Match Visible Meshes** excludes **Physics Target Set** members from target-side matching.
 - **Mesh Target Set** exists only to help inspect target mesh ownership; it does not restrict mapping, solving, or baking.

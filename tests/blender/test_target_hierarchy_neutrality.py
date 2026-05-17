@@ -51,6 +51,7 @@ def main() -> None:
         test_mark_selected_target_chain_as_physics_updates_mapping_collection_and_color()
         test_assign_selected_targets_unmarks_physics_target_set()
         test_auto_match_skips_physics_target_collection_bones()
+        test_build_selected_physics_chain_places_connected_chain_from_weights()
         test_auto_match_visible_meshes_uses_shared_weighted_geometry()
         test_auto_match_visible_meshes_replaces_stale_target_links_on_existing_source_rows()
         test_auto_match_visible_meshes_uses_existing_source_rows_as_candidate_filter()
@@ -713,6 +714,7 @@ def test_mark_selected_target_chain_as_physics_updates_mapping_collection_and_co
     assert [link.target_bone_name for link in profile.mapping_rows[1].target_links] == []
     assert target.pose.bones["TargetRoot"].color.palette == target_bone_sets.MAPPED_TARGET_PALETTE
     assert target.pose.bones["TargetChild"].color.palette == target_bone_sets.PHYSICS_TARGET_PALETTE
+    assert_color_close(target.pose.bones["TargetChild"].color.custom.normal, target_bone_sets.PHYSICS_TARGET_COLORS["normal"])
 
 
 def test_assign_selected_targets_unmarks_physics_target_set() -> None:
@@ -769,6 +771,46 @@ def test_auto_match_skips_physics_target_collection_bones() -> None:
         "SourceRoot": ["TargetRoot"],
         "SourceChild": [],
     }
+
+
+def test_build_selected_physics_chain_places_connected_chain_from_weights() -> None:
+    clear_scene()
+
+    source = create_chain_armature("BuildChainSource", ("Source0", "Source1", "Source2"), parent_child=True)
+    target = create_chain_armature("BuildChainTarget", ("Chain0", "Chain1", "Chain2"), parent_child=False)
+    profile = state.create_profile(bpy.context.scene, "BuildChainProfile")
+    profile.source_armature = source
+    profile.target_armature = target
+    save_rest_work_pose(profile, source)
+    add_mapping(profile, "Source0", "Chain0")
+    add_mapping(profile, "Source1", "Chain1")
+    add_mapping(profile, "Source2", "Chain2")
+    create_bound_weighted_mesh(
+        target,
+        "BuildChainTargetMesh",
+        {
+            "Chain0": [(0, 1.0)],
+            "Chain1": [(1, 1.0)],
+            "Chain2": [(2, 1.0)],
+        },
+    )
+    mapping.activate_armature_and_select_pose_bones(bpy.context, target, ["Chain0", "Chain1", "Chain2"])
+
+    result = bpy.ops.bone_remap.build_selected_physics_chain()
+
+    assert result == {"FINISHED"}
+    assert target_bone_sets.physics_target_names(target) == {"Chain0", "Chain1", "Chain2"}
+    assert all(len(row.target_links) == 0 for row in profile.mapping_rows)
+    assert target.data.bones["Chain1"].parent == target.data.bones["Chain0"]
+    assert target.data.bones["Chain2"].parent == target.data.bones["Chain1"]
+    assert target.data.bones["Chain1"].use_connect
+    assert target.data.bones["Chain2"].use_connect
+    assert_vector_close(target.data.bones["Chain0"].head_local, (0.0, -0.5, 0.0))
+    assert_vector_close(target.data.bones["Chain0"].tail_local, (0.0, 0.5, 0.0))
+    assert_vector_close(target.data.bones["Chain1"].head_local, (0.0, 0.5, 0.0))
+    assert_vector_close(target.data.bones["Chain1"].tail_local, (0.0, 1.5, 0.0))
+    assert_vector_close(target.data.bones["Chain2"].head_local, (0.0, 1.5, 0.0))
+    assert_vector_close(target.data.bones["Chain2"].tail_local, (0.0, 2.5, 0.0))
 
 
 def test_auto_match_visible_meshes_uses_shared_weighted_geometry() -> None:
@@ -1137,6 +1179,35 @@ def create_two_bone_armature(name: str, bone_names: tuple[str, str], parent_chil
     return armature
 
 
+def create_chain_armature(name: str, bone_names: tuple[str, ...], parent_child: bool = True):
+    bpy.ops.object.armature_add()
+    armature = bpy.context.object
+    armature.name = name
+    armature.data.name = f"{name}Data"
+
+    bpy.ops.object.mode_set(mode="EDIT")
+    edit_bones = armature.data.edit_bones
+    first = edit_bones[0]
+    first.name = bone_names[0]
+    first.head = (-2.0, 0.0, 0.0)
+    first.tail = (-1.5, 0.0, 0.0)
+    previous = first
+    for index, bone_name in enumerate(bone_names[1:], start=1):
+        bone = edit_bones.new(bone_name)
+        bone.head = (-2.0, float(index), 0.0)
+        bone.tail = (-1.5, float(index), 0.0)
+        if parent_child:
+            bone.parent = previous
+            bone.use_connect = False
+        previous = bone
+
+    bpy.ops.object.mode_set(mode="POSE")
+    for pose_bone in armature.pose.bones:
+        pose_bone.rotation_mode = "XYZ"
+    bpy.ops.object.mode_set(mode="OBJECT")
+    return armature
+
+
 def create_bound_weighted_mesh(armature, name: str, weights_by_group: dict[str, list[tuple[int, float]]]):
     mesh_data = bpy.data.meshes.new(f"{name}Data")
     mesh_data.from_pydata(
@@ -1226,6 +1297,16 @@ def assert_pose_matrices_close(expected, actual) -> None:
             for column in range(4)
         )
         assert max_error <= EPSILON, f"{bone_name} matrix error {max_error}"
+
+
+def assert_vector_close(actual, expected) -> None:
+    max_error = max(abs(actual[index] - expected[index]) for index in range(3))
+    assert max_error <= EPSILON, f"vector error {max_error}: {actual} != {expected}"
+
+
+def assert_color_close(actual, expected) -> None:
+    max_error = max(abs(actual[index] - expected[index]) for index in range(3))
+    assert max_error <= 2.0e-3, f"color error {max_error}: {actual} != {expected}"
 
 
 if __name__ == "__main__":
