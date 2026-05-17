@@ -6,7 +6,7 @@ import bpy
 from bpy.types import Action, NlaTrack, Object
 from mathutils import Matrix
 
-from . import action_slots, pose_matrices, work_pose
+from . import action_fcurves, action_slots, pose_matrices, work_pose
 
 
 ACTION_PREFIX = "BRM_WorkPose"
@@ -70,16 +70,20 @@ def _rewrite_work_pose_action(context, profile, source_armature: Object, action:
     original_action_slot = getattr(animation_data, "action_slot", None)
     original_pose = _capture_pose_matrices(source_armature)
     original_nla_mutes = [(track, track.mute) for track in animation_data.nla_tracks]
+    original_live_preview_enabled = bool(getattr(profile, "live_preview_enabled", False))
 
     try:
+        profile.live_preview_enabled = False
         for track in animation_data.nla_tracks:
             track.mute = True
-        animation_data.action = action
+        _assign_action_for_direct_keying(animation_data, action)
         work_pose.reset_source_pose_to_rest(context, source_armature)
+        _assign_action_for_direct_keying(animation_data, action)
         _apply_basis_matrices(source_armature, basis_matrix_map)
         context.view_layer.update()
+        _assign_action_for_direct_keying(animation_data, action)
         for frame in (ACTION_FRAME_START, ACTION_FRAME_END):
-            _key_pose_transforms(source_armature, basis_matrix_map.keys(), frame)
+            _key_pose_transforms(action, source_armature, basis_matrix_map.keys(), frame)
     finally:
         animation_data.action = original_action
         if original_action is None:
@@ -89,6 +93,12 @@ def _rewrite_work_pose_action(context, profile, source_armature: Object, action:
         for track, mute in original_nla_mutes:
             track.mute = mute
         _restore_pose_matrices(context, source_armature, original_pose)
+        profile.live_preview_enabled = original_live_preview_enabled
+
+
+def _assign_action_for_direct_keying(animation_data, action: Action) -> None:
+    animation_data.action = action
+    action_slots.clear_action_slot(animation_data)
 
 
 def _remove_generated_action(action: Action | None, keep: Action | None) -> None:
@@ -150,11 +160,7 @@ def _set_use_nla(animation_data, enabled: bool) -> None:
 
 
 def _clear_action(action: Action) -> None:
-    fcurves = getattr(action, "fcurves", None)
-    if fcurves is None:
-        return
-    while fcurves:
-        fcurves.remove(fcurves[0])
+    action_fcurves.clear_action_fcurves(action)
 
 
 def _apply_basis_matrices(source_armature: Object, basis_matrix_map: dict[str, Matrix]) -> None:
@@ -165,19 +171,43 @@ def _apply_basis_matrices(source_armature: Object, basis_matrix_map: dict[str, M
             pose_bone.matrix_basis = basis_matrix
 
 
-def _key_pose_transforms(source_armature: Object, bone_names, frame: int) -> None:
+def _key_pose_transforms(action: Action, source_armature: Object, bone_names, frame: int) -> None:
     for bone_name in bone_names:
         pose_bone = source_armature.pose.bones.get(bone_name)
         if pose_bone is None:
             continue
-        pose_bone.keyframe_insert(data_path="location", frame=frame)
+        _insert_channel_keys(action, source_armature, pose_bone.path_from_id("location"), pose_bone.location, frame)
         if pose_bone.rotation_mode == "QUATERNION":
-            pose_bone.keyframe_insert(data_path="rotation_quaternion", frame=frame)
+            _insert_channel_keys(
+                action,
+                source_armature,
+                pose_bone.path_from_id("rotation_quaternion"),
+                pose_bone.rotation_quaternion,
+                frame,
+            )
         elif pose_bone.rotation_mode == "AXIS_ANGLE":
-            pose_bone.keyframe_insert(data_path="rotation_axis_angle", frame=frame)
+            _insert_channel_keys(
+                action,
+                source_armature,
+                pose_bone.path_from_id("rotation_axis_angle"),
+                pose_bone.rotation_axis_angle,
+                frame,
+            )
         else:
-            pose_bone.keyframe_insert(data_path="rotation_euler", frame=frame)
-        pose_bone.keyframe_insert(data_path="scale", frame=frame)
+            _insert_channel_keys(
+                action,
+                source_armature,
+                pose_bone.path_from_id("rotation_euler"),
+                pose_bone.rotation_euler,
+                frame,
+            )
+        _insert_channel_keys(action, source_armature, pose_bone.path_from_id("scale"), pose_bone.scale, frame)
+
+
+def _insert_channel_keys(action: Action, source_armature: Object, data_path: str, values, frame: int) -> None:
+    for index, value in enumerate(values):
+        fcurve = action_fcurves.ensure_action_fcurve_for_datablock(action, source_armature, data_path, index)
+        fcurve.keyframe_points.insert(frame, float(value), options={"FAST"})
 
 
 def _capture_pose_matrices(source_armature: Object) -> dict[str, tuple[float, ...]]:

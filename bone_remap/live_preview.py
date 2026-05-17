@@ -302,6 +302,14 @@ def _frame_change_post(scene, depsgraph=None):
     if active_context is None:
         return
 
+    from . import motion_edit
+
+    motion_edit.bind_active_source_action(
+        active_context.profile,
+        active_context.source_armature,
+        context,
+        fast_if_unchanged=True,
+    )
     active_depsgraph = depsgraph or context.evaluated_depsgraph_get()
     compare_started_at = perf_counter()
     changed_source_bone_names = _source_bone_names_changed(active_context, active_depsgraph)

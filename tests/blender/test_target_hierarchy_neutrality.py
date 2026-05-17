@@ -16,7 +16,7 @@ import bpy
 from mathutils import Matrix
 
 import bone_remap
-from bone_remap import auto_map, bake, mapping, solver, state, work_pose
+from bone_remap import action_fcurves, auto_map, bake, mapping, solver, state, work_pose
 
 
 EPSILON = 1.0e-5
@@ -41,7 +41,9 @@ def main() -> None:
         test_source_actions_list_add_select_and_remove()
         test_source_action_selection_solves_live_preview_immediately()
         test_live_preview_rebinds_selected_source_action_when_animation_data_action_is_cleared()
+        test_live_preview_rebinds_selected_source_action_when_action_slot_is_cleared()
         test_source_action_selection_preserves_imported_action_slot_under_work_pose_layer()
+        test_work_pose_layer_writes_to_generated_action_not_active_motion_action()
         test_playback_frame_handler_solves_live_preview()
         test_add_weighted_source_rows_uses_bound_mesh_vertex_groups()
         test_auto_match_visible_meshes_uses_shared_weighted_geometry()
@@ -500,6 +502,33 @@ def test_live_preview_rebinds_selected_source_action_when_animation_data_action_
     assert abs(target.pose.bones["TargetRoot"].rotation_euler.z - 0.65) < 0.01
 
 
+def test_live_preview_rebinds_selected_source_action_when_action_slot_is_cleared() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("SlotRebindSource", source_names())
+    target = create_two_bone_armature("SlotRebindTarget", target_names())
+    profile = create_profile("SlotRebindProfile", source, target)
+    action = bpy.data.actions.new("SlotRebindMotion")
+
+    source.animation_data_create().action = action
+    key_source_pose(source, frame=1, parent_rotation_z=0.0, child_rotation_x=0.0)
+    key_source_pose(source, frame=2, parent_rotation_z=0.65, child_rotation_x=0.0)
+    assert bpy.ops.bone_remap.motion_action_add_current() == {"FINISHED"}
+
+    source.animation_data.action_slot = None
+    assert bpy.ops.bone_remap.motion_action_add_current() == {"FINISHED"}
+    assert source.animation_data.action_slot is not None
+
+    source.animation_data.action_slot = None
+    profile.live_preview_enabled = True
+    bpy.context.scene.frame_set(2)
+    bpy.context.view_layer.update()
+
+    assert source.animation_data.action == action
+    assert source.animation_data.action_slot is not None
+    assert abs(target.pose.bones["TargetRoot"].rotation_euler.z - 0.65) < 0.01
+
+
 def test_source_action_selection_preserves_imported_action_slot_under_work_pose_layer() -> None:
     clear_scene()
 
@@ -531,6 +560,31 @@ def test_source_action_selection_preserves_imported_action_slot_under_work_pose_
     result = solver.solve_active_profile_one_frame(bpy.context)
     assert result.written_targets == 2
     assert abs(target.pose.bones["TargetRoot"].rotation_euler.z) > 0.1
+
+
+def test_work_pose_layer_writes_to_generated_action_not_active_motion_action() -> None:
+    clear_scene()
+
+    donor = create_two_bone_armature("ContaminationDonor", source_names())
+    bpy.context.view_layer.objects.active = donor
+    bpy.ops.object.mode_set(mode="POSE")
+    key_source_pose(donor, frame=1, parent_rotation_z=0.0, child_rotation_x=0.0)
+    key_source_pose(donor, frame=2, parent_rotation_z=0.6, child_rotation_x=0.4)
+    imported_action = donor.animation_data.action
+    imported_keyframes_before = action_keyframe_count(imported_action)
+
+    bpy.ops.object.mode_set(mode="OBJECT")
+    source = create_two_bone_armature("ContaminationSource", source_names())
+    target = create_two_bone_armature("ContaminationTarget", target_names())
+    profile = create_profile("ContaminationProfile", source, target)
+
+    source.animation_data_create().action = imported_action
+    assert bpy.ops.bone_remap.motion_action_add_current() == {"FINISHED"}
+
+    assert action_keyframe_count(imported_action) == imported_keyframes_before
+    assert profile.work_pose_action is not None
+    assert action_keyframe_count(profile.work_pose_action) > 0
+    assert source.animation_data.action == imported_action
 
 
 def test_playback_frame_handler_solves_live_preview() -> None:
@@ -963,6 +1017,10 @@ def visible_pose_matrices(armature, bone_names: tuple[str, str]):
         bone_name: evaluated.pose.bones[bone_name].matrix.copy()
         for bone_name in bone_names
     }
+
+
+def action_keyframe_count(action) -> int:
+    return sum(len(fcurve.keyframe_points) for fcurve in action_fcurves.iter_action_fcurves(action))
 
 
 def selected_pose_bone_names(armature) -> list[str]:

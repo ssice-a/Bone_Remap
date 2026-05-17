@@ -58,6 +58,7 @@ def add_source_action(context, profile, source_armature: Object, action) -> int:
     _select_source_action_index(source_armature, index)
     if profile.active_motion_action != action:
         profile.active_motion_action = action
+    bind_active_source_action(profile, source_armature, context)
     return index
 
 

@@ -25,6 +25,21 @@ def iter_action_fcurves(action):
         yield fcurve
 
 
+def ensure_action_fcurve_for_datablock(action, datablock, data_path: str, index: int):
+    ensure_for_datablock = getattr(action, "fcurve_ensure_for_datablock", None)
+    if ensure_for_datablock is not None:
+        return ensure_for_datablock(datablock, data_path, index=index)
+
+    fcurves = getattr(action, "fcurves", None)
+    if fcurves is None:
+        raise RuntimeError("Action does not expose F-Curve creation API.")
+
+    fcurve = fcurves.find(data_path, index=index)
+    if fcurve is not None:
+        return fcurve
+    return fcurves.new(data_path=data_path, index=index)
+
+
 def remove_action_fcurve(owner, fcurve) -> None:
     owner.remove(fcurve)
 
