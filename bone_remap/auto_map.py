@@ -28,14 +28,18 @@ def auto_match_active_profile(context) -> tuple[int, str]:
     if not source_meshes or not target_meshes:
         return 0, "Auto Match Mesh Scope needs source and target meshes."
 
+    source_filter = _existing_source_row_names(profile, active_context.source_armature)
     source_started_at = perf_counter()
     source_field = weighted_geometry.visible_source_weight_field(
         context,
         source_meshes,
         active_context.source_armature,
+        allowed_bone_names=source_filter,
     )
     source_seconds = perf_counter() - source_started_at
     if source_field is None:
+        if source_filter:
+            return 0, "No usable source vertex weights for Mapping Table source rows."
         return 0, "No usable source vertex weights with exact bone-name vertex groups."
 
     was_live_enabled = _pause_live_preview_for_target_sampling(profile)
@@ -63,7 +67,7 @@ def auto_match_active_profile(context) -> tuple[int, str]:
     )
     plan_seconds = perf_counter() - plan_started_at
     apply_started_at = perf_counter()
-    matched = apply_assignment_plan(profile, plan)
+    matched = apply_assignment_plan(profile, plan, source_row_names=source_filter)
     apply_seconds = perf_counter() - apply_started_at
     if matched:
         _solve_live_preview_if_enabled(context)
@@ -74,9 +78,16 @@ def auto_match_active_profile(context) -> tuple[int, str]:
     )
 
 
-def apply_assignment_plan(profile, plan: auto_match_core.AssignmentPlan) -> int:
-    profile.mapping_rows.clear()
-    mapping.set_active_mapping_row_index(profile, -1)
+def apply_assignment_plan(
+    profile,
+    plan: auto_match_core.AssignmentPlan,
+    source_row_names: tuple[str, ...] | None = None,
+) -> int:
+    if source_row_names:
+        _clear_existing_target_links(profile)
+    else:
+        profile.mapping_rows.clear()
+        mapping.set_active_mapping_row_index(profile, -1)
     runtime_plan.invalidate_runtime_plan(profile)
 
     matched = 0
@@ -85,6 +96,30 @@ def apply_assignment_plan(profile, plan: auto_match_core.AssignmentPlan) -> int:
         mapping.assign_targets_to_row(profile, row, list(assignment.target_names))
         matched += len(assignment.target_names)
     return matched
+
+
+def _existing_source_row_names(profile, source_armature) -> tuple[str, ...] | None:
+    if not profile.mapping_rows:
+        return None
+
+    source_bone_names = {bone.name for bone in source_armature.pose.bones}
+    names: list[str] = []
+    seen: set[str] = set()
+    for row in profile.mapping_rows:
+        source_bone_name = row.source_bone_name
+        if not source_bone_name or source_bone_name not in source_bone_names:
+            continue
+        if source_bone_name in seen:
+            continue
+        seen.add(source_bone_name)
+        names.append(source_bone_name)
+    return tuple(names)
+
+
+def _clear_existing_target_links(profile) -> None:
+    for row in profile.mapping_rows:
+        row.target_links.clear()
+        row.active_target_link_index = -1
 
 
 def add_selected_meshes_to_scope(context, collection) -> int:

@@ -433,6 +433,51 @@ class BRM_OT_mapping_add_weighted_source_rows(Operator):
         return {"FINISHED"}
 
 
+class BRM_OT_mapping_add_selected_weighted_source_rows(Operator):
+    bl_idname = "bone_remap.mapping_add_selected_weighted_source_rows"
+    bl_label = "Add Selected Weighted Source Rows"
+    bl_description = "Create Mapping Rows from selected Source Armature bones that have non-zero same-name vertex group weights"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        profile, source, error = _active_profile_source(context)
+        if error is not None:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+
+        source_meshes = weighted_geometry.bound_meshes(context.scene, source)
+        if not source_meshes:
+            self.report({"ERROR"}, "No source meshes bound to Source Armature.")
+            return {"CANCELLED"}
+
+        selected_names = selected_bone_names(context, source)
+        if not selected_names:
+            self.report({"ERROR"}, "Select one or more bones on the Source Armature.")
+            return {"CANCELLED"}
+
+        weighted_names = set(weighted_source_bone_names(context.scene, source))
+        source_bone_names = [
+            bone_name
+            for bone_name in selected_names
+            if bone_name in weighted_names
+        ]
+        if not source_bone_names:
+            self.report({"ERROR"}, "Selected source bones have no same-name non-zero vertex group weights.")
+            return {"CANCELLED"}
+
+        created = 0
+        for source_bone_name in source_bone_names:
+            _row, was_created = ensure_mapping_row(profile, source_bone_name)
+            created += int(was_created)
+
+        _refresh_after_mapping_change(context, reason="mapping_selected_weighted_source_rows_added")
+        self.report(
+            {"INFO"},
+            f"Added {created} selected weighted source rows; matched {len(source_bone_names)} selected source bones.",
+        )
+        return {"FINISHED"}
+
+
 class BRM_OT_mapping_remove_active_source_row(Operator):
     bl_idname = "bone_remap.mapping_remove_active_source_row"
     bl_label = "Remove Source Row"
@@ -460,6 +505,46 @@ class BRM_OT_mapping_remove_active_source_row(Operator):
         cleanup_count = _cleanup_removed_targets(context, profile, target, removed_targets)
         _refresh_after_mapping_change(context, reason="mapping_source_row_removed")
         self.report({"INFO"}, f"Removed {source_bone_name}; cleaned {cleanup_count} target channels.")
+        return {"FINISHED"}
+
+
+class BRM_OT_mapping_clear_table(Operator):
+    bl_idname = "bone_remap.mapping_clear_table"
+    bl_label = "Clear Mapping Table"
+    bl_description = "Remove every Source Row and Target Link from the Mapping Table"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        profile = state.get_active_profile(context.scene)
+        if profile is None:
+            self.report({"ERROR"}, "No Active Retarget Profile.")
+            return {"CANCELLED"}
+
+        row_count = len(profile.mapping_rows)
+        link_count = sum(len(row.target_links) for row in profile.mapping_rows)
+        if row_count == 0:
+            self.report({"INFO"}, "Mapping Table is already empty.")
+            return {"FINISHED"}
+
+        removed_targets = mapped_target_names(profile)
+        profile.mapping_rows.clear()
+        profile.active_mapping_row_index = -1
+        profile.revealed_target_bone_name = ""
+        profile.revealed_owner_source_bone_name = ""
+        runtime_plan.invalidate_runtime_plan(profile)
+
+        cleanup_count = 0
+        target = profile.target_armature
+        if _is_armature(target):
+            cleanup_count = _cleanup_removed_targets(context, profile, target, removed_targets)
+        else:
+            profile.live_preview_last_written_targets.clear()
+
+        _refresh_after_mapping_change(context, reason="mapping_table_cleared")
+        self.report(
+            {"INFO"},
+            f"Cleared {row_count} source rows and {link_count} target links; cleaned {cleanup_count} target channels.",
+        )
         return {"FINISHED"}
 
 
@@ -700,7 +785,9 @@ class BRM_OT_mapping_report_health(Operator):
 _CLASSES = (
     BRM_OT_mapping_add_source_rows,
     BRM_OT_mapping_add_weighted_source_rows,
+    BRM_OT_mapping_add_selected_weighted_source_rows,
     BRM_OT_mapping_remove_active_source_row,
+    BRM_OT_mapping_clear_table,
     BRM_OT_mapping_activate_source_row,
     BRM_OT_mapping_activate_target_link,
     BRM_OT_mapping_assign_selected_targets,

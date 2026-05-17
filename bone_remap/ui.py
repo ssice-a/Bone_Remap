@@ -148,8 +148,11 @@ class BRM_PT_retarget_workbench(Panel):
         mapping_box = layout.box()
         mapping_box.label(text="Mapping Table")
         row = mapping_box.row(align=True)
-        row.operator("bone_remap.mapping_add_weighted_source_rows", icon="GROUP_VERTEX")
+        row.operator("bone_remap.mapping_add_weighted_source_rows", text="All Weighted", icon="GROUP_VERTEX")
+        row.operator("bone_remap.mapping_add_selected_weighted_source_rows", text="Selected Weighted", icon="BONE_DATA")
+        row = mapping_box.row(align=True)
         row.operator("bone_remap.auto_match_visible_meshes", text="Auto Match", icon="MOD_VERTEX_WEIGHT")
+        row.operator("bone_remap.mapping_clear_table", text="Clear", icon="TRASH")
 
         scope_row = mapping_box.row(align=True)
         scope_row.label(
@@ -258,6 +261,10 @@ class BRM_PT_retarget_workbench(Panel):
         calibration_box.operator("bone_remap.channel_align_heads", icon="ARMATURE_DATA")
         calibration_box.operator("bone_remap.target_bind_refresh", icon="CHECKMARK")
         calibration_box.label(text=f"Stored target binds: {len(profile.target_bind_matrices)}", icon="INFO")
+
+        binding_box = layout.box()
+        binding_box.label(text="Bone Binding")
+        binding_box.operator("bone_remap.group_target_bones_by_mesh", icon="BONE_DATA")
 
         profile_errors = [message for message in state.validate_profile(profile) if message.severity == "ERROR"]
         if profile_errors:

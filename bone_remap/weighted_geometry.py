@@ -170,10 +170,15 @@ def visible_weighted_point_clouds(context, meshes, armature) -> tuple[auto_match
     return tuple(clouds)
 
 
-def visible_source_weight_field(context, meshes, armature) -> auto_match_core.SourceWeightField | None:
-    """Sample evaluated visible source mesh vertices with all source bone weights."""
+def visible_source_weight_field(
+    context,
+    meshes,
+    armature,
+    allowed_bone_names: set[str] | tuple[str, ...] | None = None,
+) -> auto_match_core.SourceWeightField | None:
+    """Sample evaluated visible source mesh vertices with selected source bone weights."""
 
-    channel_names = _source_weight_channel_names(meshes, armature)
+    channel_names = _source_weight_channel_names(meshes, armature, allowed_bone_names=allowed_bone_names)
     if not channel_names:
         return None
 
@@ -238,8 +243,11 @@ def visible_point_cloud_diag(clouds: tuple[auto_match_core.WeightedPointCloud, .
     return float(np.linalg.norm(bounds_max - bounds_min))
 
 
-def _source_weight_channel_names(meshes, armature) -> tuple[str, ...]:
+def _source_weight_channel_names(meshes, armature, allowed_bone_names=None) -> tuple[str, ...]:
     bone_names = {bone.name for bone in armature.pose.bones}
+    if allowed_bone_names is not None:
+        allowed = set(allowed_bone_names)
+        bone_names &= allowed
     weighted_group_names = {
         group.name
         for mesh_obj in meshes

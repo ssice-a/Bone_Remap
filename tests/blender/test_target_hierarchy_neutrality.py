@@ -16,7 +16,7 @@ import bpy
 from mathutils import Matrix
 
 import bone_remap
-from bone_remap import action_fcurves, auto_map, bake, mapping, solver, state, work_pose
+from bone_remap import action_fcurves, auto_map, bake, binding, mapping, solver, state, work_pose
 
 
 EPSILON = 1.0e-5
@@ -46,9 +46,13 @@ def main() -> None:
         test_work_pose_layer_writes_to_generated_action_not_active_motion_action()
         test_playback_frame_handler_solves_live_preview()
         test_add_weighted_source_rows_uses_bound_mesh_vertex_groups()
+        test_add_selected_weighted_source_rows_filters_selected_bones_by_weights()
+        test_group_target_bones_by_mesh_creates_mesh_bone_collections()
         test_auto_match_visible_meshes_uses_shared_weighted_geometry()
-        test_auto_match_visible_meshes_replaces_stale_mapping_rows()
+        test_auto_match_visible_meshes_replaces_stale_target_links_on_existing_source_rows()
+        test_auto_match_visible_meshes_uses_existing_source_rows_as_candidate_filter()
         test_auto_match_pauses_live_preview_without_clearing_visible_target_pose()
+        test_mapping_clear_table_removes_all_rows_and_selection_state()
         test_target_selection_syncs_active_source_row()
         test_assign_selected_targets_to_active_source_preserves_target_selection_after_source_row_click()
         test_mapping_row_activation_sets_active_source_without_stealing_target_selection()
@@ -637,6 +641,45 @@ def test_add_weighted_source_rows_uses_bound_mesh_vertex_groups() -> None:
     assert [row.source_bone_name for row in profile.mapping_rows] == ["SourceChild"]
 
 
+def test_add_selected_weighted_source_rows_filters_selected_bones_by_weights() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("SelectedWeightedSource", source_names())
+    target = create_two_bone_armature("SelectedWeightedTarget", target_names())
+    profile = state.create_profile(bpy.context.scene, "SelectedWeightedRowsProfile")
+    profile.source_armature = source
+    profile.target_armature = target
+    create_bound_weighted_mesh(source, "SelectedWeightedSourceMesh", {"SourceChild": [(0, 1.0)]})
+    mapping.activate_armature_and_select_pose_bones(bpy.context, source, ["SourceRoot", "SourceChild"])
+
+    result = bpy.ops.bone_remap.mapping_add_selected_weighted_source_rows()
+
+    assert result == {"FINISHED"}
+    assert [row.source_bone_name for row in profile.mapping_rows] == ["SourceChild"]
+
+
+def test_group_target_bones_by_mesh_creates_mesh_bone_collections() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("BindingSource", source_names())
+    target = create_two_bone_armature("BindingTarget", target_names())
+    profile = state.create_profile(bpy.context.scene, "BindingProfile")
+    profile.source_armature = source
+    profile.target_armature = target
+    create_bound_weighted_mesh(target, "BindingTargetMeshA", {"TargetRoot": [(0, 1.0)]})
+    create_bound_weighted_mesh(target, "BindingTargetMeshB", {"TargetChild": [(2, 1.0)], "NotABone": [(1, 1.0)]})
+
+    result = bpy.ops.bone_remap.group_target_bones_by_mesh()
+
+    assert result == {"FINISHED"}
+    mesh_a_collection = target.data.collections.get(f"{binding.BONE_COLLECTION_PREFIX}BindingTargetMeshA")
+    mesh_b_collection = target.data.collections.get(f"{binding.BONE_COLLECTION_PREFIX}BindingTargetMeshB")
+    assert mesh_a_collection is not None
+    assert mesh_b_collection is not None
+    assert {bone.name for bone in mesh_a_collection.bones} == {"TargetRoot"}
+    assert {bone.name for bone in mesh_b_collection.bones} == {"TargetChild"}
+
+
 def test_auto_match_visible_meshes_uses_shared_weighted_geometry() -> None:
     clear_scene()
 
@@ -671,7 +714,7 @@ def test_auto_match_visible_meshes_uses_shared_weighted_geometry() -> None:
     }
 
 
-def test_auto_match_visible_meshes_replaces_stale_mapping_rows() -> None:
+def test_auto_match_visible_meshes_replaces_stale_target_links_on_existing_source_rows() -> None:
     clear_scene()
 
     source = create_two_bone_armature("AutoMapReplaceSource", source_names())
@@ -680,7 +723,8 @@ def test_auto_match_visible_meshes_replaces_stale_mapping_rows() -> None:
     profile.source_armature = source
     profile.target_armature = target
     save_rest_work_pose(profile, source)
-    add_mapping(profile, "0__old-target-armature", "TargetRoot")
+    add_mapping(profile, "SourceRoot", "TargetChild")
+    add_mapping(profile, "SourceChild", "TargetRoot")
     create_bound_weighted_mesh(
         source,
         "AutoMapReplaceSourceMesh",
@@ -706,6 +750,35 @@ def test_auto_match_visible_meshes_replaces_stale_mapping_rows() -> None:
     }
 
 
+def test_auto_match_visible_meshes_uses_existing_source_rows_as_candidate_filter() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("AutoMapFilterSource", source_names())
+    target = create_two_bone_armature("AutoMapFilterTarget", target_names())
+    profile = state.create_profile(bpy.context.scene, "AutoMapFilterProfile")
+    profile.source_armature = source
+    profile.target_armature = target
+    save_rest_work_pose(profile, source)
+    mapping.ensure_mapping_row(profile, "SourceRoot")
+    create_bound_weighted_mesh(
+        source,
+        "AutoMapFilterSourceMesh",
+        {"SourceRoot": [(0, 1.0)], "SourceChild": [(2, 1.0)]},
+    )
+    create_bound_weighted_mesh(
+        target,
+        "AutoMapFilterTargetMesh",
+        {"TargetRoot": [(0, 1.0)], "TargetChild": [(2, 1.0)]},
+    )
+
+    assert bpy.ops.bone_remap.auto_match_add_bound_meshes() == {"FINISHED"}
+    result = bpy.ops.bone_remap.auto_match_visible_meshes()
+
+    assert result == {"FINISHED"}
+    assert [row.source_bone_name for row in profile.mapping_rows] == ["SourceRoot"]
+    assert [link.target_bone_name for link in profile.mapping_rows[0].target_links] == ["TargetRoot"]
+
+
 def test_auto_match_pauses_live_preview_without_clearing_visible_target_pose() -> None:
     clear_scene()
 
@@ -729,6 +802,28 @@ def test_auto_match_pauses_live_preview_without_clearing_visible_target_pose() -
     assert was_enabled is True
     assert profile.live_preview_enabled is False
     assert clear_calls == []
+
+
+def test_mapping_clear_table_removes_all_rows_and_selection_state() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("ClearTableSource", source_names())
+    target = create_two_bone_armature("ClearTableTarget", target_names())
+    profile = create_profile("ClearTableProfile", source, target)
+    profile.active_mapping_row_index = 1
+    profile.revealed_target_bone_name = "TargetChild"
+    profile.revealed_owner_source_bone_name = "SourceChild"
+    written = profile.live_preview_last_written_targets.add()
+    written.target_bone_name = "TargetRoot"
+
+    result = bpy.ops.bone_remap.mapping_clear_table()
+
+    assert result == {"FINISHED"}
+    assert len(profile.mapping_rows) == 0
+    assert profile.active_mapping_row_index == -1
+    assert profile.revealed_target_bone_name == ""
+    assert profile.revealed_owner_source_bone_name == ""
+    assert len(profile.live_preview_last_written_targets) == 0
 
 
 def test_target_selection_syncs_active_source_row() -> None:

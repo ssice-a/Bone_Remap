@@ -25,13 +25,14 @@ if "properties" in locals():
         "presets",
         "auto_map",
         "target_calibration",
+        "binding",
         "ui",
     ):
         _module = sys.modules.get(f"{__name__}.{_module_name}") or locals().get(_module_name)
         if _module is not None:
             importlib.reload(_module)
 
-from . import properties, operators, work_pose, runtime_plan, mapping, solver, live_preview, motion_edit, bake, presets, auto_map, target_calibration, ui
+from . import properties, operators, work_pose, runtime_plan, mapping, solver, live_preview, motion_edit, bake, presets, auto_map, target_calibration, binding, ui
 
 _MODULES = (
     properties,
@@ -45,6 +46,7 @@ _MODULES = (
     presets,
     auto_map,
     target_calibration,
+    binding,
     ui,
 )
 
