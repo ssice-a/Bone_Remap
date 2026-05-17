@@ -95,7 +95,11 @@ def solve_profile_one_frame(
     scope_started_at = perf_counter()
     source_bone_name_scope = None if source_bone_names is None else set(source_bone_names)
     scoped_source_count = 0 if source_bone_name_scope is None else len(source_bone_name_scope)
-    rows_to_solve = _rows_for_source_scope(plan.rows, target_armature, source_bone_name_scope, plan.mapped_target_names)
+    if source_bone_name_scope is None:
+        rows_to_solve = plan.rows
+        target_write_order = plan.mapped_target_write_order
+    else:
+        rows_to_solve, target_write_order = runtime_plan.solve_scope_for_sources(plan, source_bone_name_scope)
     scope_ms = _elapsed_ms(scope_started_at)
 
     target_writes: dict[str, Matrix] = {}
@@ -115,17 +119,12 @@ def solve_profile_one_frame(
         source_matrix = source_pose_bone.matrix.copy()
         if source_pose_signature is not None:
             source_pose_signature[row.source_bone_name] = source_matrix
-        source_delta = source_matrix @ row.source_work_pose_matrix.inverted_safe()
+        source_delta = source_matrix @ row.source_work_pose_inverse
         for target_channel in row.target_channels:
             target_writes[target_channel.bone_name] = source_delta @ target_channel.bind_matrix
     compute_ms = _elapsed_ms(compute_started_at)
 
     order_started_at = perf_counter()
-    target_write_order = (
-        plan.mapped_target_write_order
-        if source_bone_name_scope is None
-        else runtime_plan.target_write_order(target_armature, target_writes)
-    )
     written_target_names = [
         target_bone_name
         for target_bone_name in target_write_order
@@ -188,63 +187,6 @@ def solve_profile_one_frame(
         ),
         source_pose_signature=source_pose_signature,
     )
-
-
-def _rows_for_source_scope(
-    rows: tuple[runtime_plan.RuntimePlanRow, ...],
-    target_armature: Object,
-    source_bone_names: set[str] | None,
-    mapped_target_names: tuple[str, ...],
-) -> tuple[runtime_plan.RuntimePlanRow, ...]:
-    if source_bone_names is None:
-        return rows
-    if not source_bone_names:
-        return ()
-
-    mapped_target_set = set(mapped_target_names)
-    direct_target_names = {
-        target_channel.bone_name
-        for row in rows
-        if row.source_bone_name in source_bone_names
-        for target_channel in row.target_channels
-        if target_channel.bone_name
-    }
-    if not direct_target_names:
-        return ()
-
-    affected_target_names = set(
-        runtime_plan.target_descendant_names(
-            target_armature,
-            direct_target_names,
-            mapped_target_set,
-        )
-    )
-    if not affected_target_names:
-        return ()
-
-    scoped_rows = []
-    for row in rows:
-        if row.source_bone_name in source_bone_names:
-            scoped_rows.append(row)
-            continue
-
-        filtered_target_channels = tuple(
-            target_channel
-            for target_channel in row.target_channels
-            if target_channel.bone_name in affected_target_names
-        )
-        if filtered_target_channels:
-            scoped_rows.append(
-                runtime_plan.RuntimePlanRow(
-                    source_bone_name=row.source_bone_name,
-                    source_work_pose_matrix=row.source_work_pose_matrix,
-                    target_channels=filtered_target_channels,
-                )
-            )
-
-    return tuple(scoped_rows)
-
-
 def _error_result(message: str, started_at=None) -> SolveResult:
     started_at = started_at or perf_counter()
     return SolveResult(

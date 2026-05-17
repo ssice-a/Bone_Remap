@@ -378,13 +378,12 @@ def _source_signature_key(active_context) -> tuple[int, int, int]:
 def _source_pose_signature(active_context, depsgraph) -> dict[str, object | None]:
     source_armature = active_context.source_armature
     evaluated_source = source_armature.evaluated_get(depsgraph)
-    bone_names = sorted(
-        {
-            row.source_bone_name
-            for row in active_context.profile.mapping_rows
-            if row.source_bone_name
-        }
+    plan = runtime_plan.build_runtime_plan(
+        active_context.profile,
+        active_context.source_armature,
+        active_context.target_armature,
     )
+    bone_names = plan.mapped_source_names
     signature: dict[str, object | None] = {}
     for bone_name in bone_names:
         pose_bone = evaluated_source.pose.bones.get(bone_name)
@@ -409,11 +408,11 @@ def _source_bone_names_changed(active_context, depsgraph) -> tuple[str, ...]:
     previous_signature = _LAST_SOURCE_SIGNATURES.get(signature_key)
     if previous_signature is None:
         _LAST_SOURCE_SIGNATURES[signature_key] = current_signature
-        return tuple(sorted(current_signature.keys()))
+        return tuple(current_signature.keys())
 
     changed_names = tuple(
         bone_name
-        for bone_name in sorted(current_signature.keys())
+        for bone_name in current_signature.keys()
         if _signature_matrix_changed(
             current_signature.get(bone_name),
             previous_signature.get(bone_name),

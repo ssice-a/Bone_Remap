@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import importlib
 import statistics
+import sys
 import time
 from array import array
+from pathlib import Path
 
 import bpy
 
 
 SAMPLE_COUNT = 24
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 
 
 def main() -> None:
@@ -166,6 +170,21 @@ def main() -> None:
 
 
 def _import_bone_remap_modules():
+    try:
+        import bone_remap
+
+        if not hasattr(bpy.types.Scene, "brm_retarget_profiles"):
+            bone_remap.register()
+        return (
+            importlib.import_module("bone_remap.state"),
+            importlib.import_module("bone_remap.solver"),
+            importlib.import_module("bone_remap.live_preview"),
+            importlib.import_module("bone_remap.pose_matrices"),
+            importlib.import_module("bone_remap.motion_edit"),
+        )
+    except Exception as error:
+        print("[BRM-HOTSPOT] local import failed:", error)
+
     prefixes = ("Bone_Remap.bone_remap", "bone_remap")
     for prefix in prefixes:
         try:

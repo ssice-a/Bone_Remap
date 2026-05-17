@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -22,14 +22,19 @@ class TargetChannelPlan:
 class RuntimePlanRow:
     source_bone_name: str
     source_work_pose_matrix: Matrix
+    source_work_pose_inverse: Matrix
     target_channels: tuple[TargetChannelPlan, ...]
 
 
 @dataclass(frozen=True)
 class RuntimePlan:
     rows: tuple[RuntimePlanRow, ...]
+    mapped_source_names: tuple[str, ...]
     mapped_target_names: tuple[str, ...]
     mapped_target_write_order: tuple[str, ...]
+    scoped_rows_by_source: dict[str, tuple[RuntimePlanRow, ...]]
+    scoped_target_write_order_by_source: dict[str, tuple[str, ...]]
+    affected_target_names_by_source: dict[str, frozenset[str]]
     skipped_rows: int
     skipped_links: int
     messages: list[state.ValidationMessage]
@@ -112,17 +117,86 @@ def _build_runtime_plan(profile, source_armature: Object, target_armature: Objec
             target_channels.append(TargetChannelPlan(link.target_bone_name, target_bind_matrix))
 
         if target_channels:
-            rows.append(RuntimePlanRow(source_bone_name, source_work_pose_matrix, tuple(target_channels)))
+            rows.append(
+                RuntimePlanRow(
+                    source_bone_name,
+                    source_work_pose_matrix,
+                    source_work_pose_matrix.inverted_safe(),
+                    tuple(target_channels),
+                )
+            )
 
     mapped_names = tuple(mapped_target_names(profile))
+    mapped_write_order = tuple(target_write_order(target_armature, mapped_names))
+    scoped_rows_by_source, scoped_target_write_order_by_source, affected_target_names_by_source = _build_source_scopes(
+        target_armature,
+        tuple(rows),
+        mapped_names,
+        mapped_write_order,
+    )
     return RuntimePlan(
         rows=tuple(rows),
+        mapped_source_names=tuple(unique_names(row.source_bone_name for row in rows)),
         mapped_target_names=mapped_names,
-        mapped_target_write_order=tuple(target_write_order(target_armature, mapped_names)),
+        mapped_target_write_order=mapped_write_order,
+        scoped_rows_by_source=scoped_rows_by_source,
+        scoped_target_write_order_by_source=scoped_target_write_order_by_source,
+        affected_target_names_by_source=affected_target_names_by_source,
         skipped_rows=skipped_rows,
         skipped_links=skipped_links,
         messages=messages,
     )
+
+
+def solve_scope_for_sources(plan: RuntimePlan, source_bone_names: Iterable[str]) -> tuple[tuple[RuntimePlanRow, ...], tuple[str, ...]]:
+    source_scope = tuple(unique_names(source_bone_names))
+    if not source_scope:
+        return (), ()
+
+    if len(source_scope) == 1:
+        source_bone_name = source_scope[0]
+        return (
+            plan.scoped_rows_by_source.get(source_bone_name, ()),
+            plan.scoped_target_write_order_by_source.get(source_bone_name, ()),
+        )
+
+    if len(source_scope) >= len(plan.mapped_source_names) and set(source_scope).issuperset(plan.mapped_source_names):
+        return plan.rows, plan.mapped_target_write_order
+
+    scoped_source_names = set(source_scope)
+    affected_target_names: set[str] = set()
+    for source_bone_name in source_scope:
+        affected_target_names.update(plan.affected_target_names_by_source.get(source_bone_name, ()))
+    if not affected_target_names:
+        return (), ()
+
+    scoped_rows = []
+    for row in plan.rows:
+        if row.source_bone_name in scoped_source_names:
+            scoped_rows.append(row)
+            continue
+
+        filtered_channels = tuple(
+            target_channel
+            for target_channel in row.target_channels
+            if target_channel.bone_name in affected_target_names
+        )
+        if filtered_channels:
+            scoped_rows.append(
+                RuntimePlanRow(
+                    row.source_bone_name,
+                    row.source_work_pose_matrix,
+                    row.source_work_pose_inverse,
+                    filtered_channels,
+                )
+            )
+
+    scoped_order = tuple(
+        target_bone_name
+        for target_bone_name in plan.mapped_target_write_order
+        if target_bone_name in affected_target_names
+    )
+    return tuple(scoped_rows), scoped_order
 
 
 def _runtime_plan_cache_key(profile, source_armature: Object, target_armature: Object) -> tuple[int, int, int, int, int, int]:
@@ -134,6 +208,69 @@ def _runtime_plan_cache_key(profile, source_armature: Object, target_armature: O
         target_armature.as_pointer(),
         target_armature.data.as_pointer(),
     )
+
+
+def _build_source_scopes(
+    target_armature: Object,
+    rows: tuple[RuntimePlanRow, ...],
+    mapped_target_names: tuple[str, ...],
+    mapped_target_write_order: tuple[str, ...],
+) -> tuple[
+    dict[str, tuple[RuntimePlanRow, ...]],
+    dict[str, tuple[str, ...]],
+    dict[str, frozenset[str]],
+]:
+    direct_target_names_by_source: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        direct_target_names_by_source[row.source_bone_name].extend(
+            target_channel.bone_name
+            for target_channel in row.target_channels
+            if target_channel.bone_name
+        )
+
+    mapped_target_set = set(mapped_target_names)
+    scoped_rows_by_source: dict[str, tuple[RuntimePlanRow, ...]] = {}
+    scoped_target_write_order_by_source: dict[str, tuple[str, ...]] = {}
+    affected_target_names_by_source: dict[str, frozenset[str]] = {}
+
+    for source_bone_name, direct_target_names in direct_target_names_by_source.items():
+        affected_target_names = frozenset(
+            target_descendant_names(
+                target_armature,
+                direct_target_names,
+                mapped_target_set,
+            )
+        )
+        affected_target_names_by_source[source_bone_name] = affected_target_names
+        scoped_rows = []
+        for row in rows:
+            if row.source_bone_name == source_bone_name:
+                scoped_rows.append(row)
+                continue
+
+            filtered_channels = tuple(
+                target_channel
+                for target_channel in row.target_channels
+                if target_channel.bone_name in affected_target_names
+            )
+            if filtered_channels:
+                scoped_rows.append(
+                    RuntimePlanRow(
+                        row.source_bone_name,
+                        row.source_work_pose_matrix,
+                        row.source_work_pose_inverse,
+                        filtered_channels,
+                    )
+                )
+
+        scoped_rows_by_source[source_bone_name] = tuple(scoped_rows)
+        scoped_target_write_order_by_source[source_bone_name] = tuple(
+            target_bone_name
+            for target_bone_name in mapped_target_write_order
+            if target_bone_name in affected_target_names
+        )
+
+    return scoped_rows_by_source, scoped_target_write_order_by_source, affected_target_names_by_source
 
 
 def mapping_health_messages(profile, source_armature: Object | None, target_armature: Object | None) -> list[state.ValidationMessage]:
@@ -273,8 +410,12 @@ def unique_names(names: Iterable[str]) -> list[str]:
 def _empty_plan(profile, messages: list[state.ValidationMessage]) -> RuntimePlan:
     return RuntimePlan(
         rows=(),
+        mapped_source_names=(),
         mapped_target_names=tuple(mapped_target_names(profile)),
         mapped_target_write_order=(),
+        scoped_rows_by_source={},
+        scoped_target_write_order_by_source={},
+        affected_target_names_by_source={},
         skipped_rows=0,
         skipped_links=0,
         messages=messages,
