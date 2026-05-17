@@ -625,6 +625,9 @@ class BRM_OT_mapping_assign_selected_targets(Operator):
             return {"CANCELLED"}
 
         valid_target_names = [name for name in target_bone_names if name in target.pose.bones]
+        from . import target_bone_sets
+
+        target_bone_sets.unmark_physics_targets(target, valid_target_names)
         assigned, moved = assign_targets_to_row(profile, row, valid_target_names)
         _refresh_after_mapping_change(context, reason="mapping_targets_assigned")
         self.report({"INFO"}, f"Assigned {assigned} targets to {row.source_bone_name}; moved {moved}.")
@@ -811,8 +814,11 @@ def unregister():
 
 
 def _refresh_after_mapping_change(context, reason: str) -> None:
-    from . import live_preview
+    from . import live_preview, target_bone_sets
 
+    profile = state.get_active_profile(context.scene)
+    if profile is not None:
+        target_bone_sets.sync_profile_target_sets(profile)
     live_preview.solve_if_enabled(context, reason=reason, update_view_layer=True)
     context.view_layer.update()
     _tag_redraw(context)

@@ -84,6 +84,14 @@ def sync_active_source_action_index(self, context) -> None:
         context.view_layer.update()
 
 
+def sync_bone_binding_highlight(self, context) -> None:
+    if context is None:
+        return
+    from . import target_bone_sets
+
+    target_bone_sets.sync_profile_target_sets(self)
+
+
 class BRM_WorkPoseBoneMatrix(PropertyGroup):
     """One saved Work Pose matrix for a source pose bone."""
 
@@ -280,6 +288,12 @@ class BRM_RetargetProfile(PropertyGroup):
     live_preview_last_result: StringProperty(
         name="Live Preview Last Result",
         description="Last Live Preview status message",
+    )
+    bone_binding_highlight_enabled: BoolProperty(
+        name="Highlight Bone Sets",
+        description="Color target bones from BRM Mapped Targets and BRM Physics Targets collections",
+        default=False,
+        update=sync_bone_binding_highlight,
     )
     active_motion_action: PointerProperty(
         name="Active Motion Action",

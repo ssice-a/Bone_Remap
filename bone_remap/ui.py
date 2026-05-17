@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import bpy
 from bpy.types import Panel, UIList
 
-from . import mapping, state
+from . import mapping, state, target_bone_sets
 from .properties import ACTIVE_PROFILE_INDEX_ATTR, PROFILE_COLLECTION_ATTR
 from .registration import register_classes, unregister_classes
 
@@ -262,9 +261,7 @@ class BRM_PT_retarget_workbench(Panel):
         calibration_box.operator("bone_remap.target_bind_refresh", icon="CHECKMARK")
         calibration_box.label(text=f"Stored target binds: {len(profile.target_bind_matrices)}", icon="INFO")
 
-        binding_box = layout.box()
-        binding_box.label(text="Bone Binding")
-        binding_box.operator("bone_remap.group_target_bones_by_mesh", icon="BONE_DATA")
+        _draw_bone_binding_box(layout, profile)
 
         profile_errors = [message for message in state.validate_profile(profile) if message.severity == "ERROR"]
         if profile_errors:
@@ -281,6 +278,29 @@ _CLASSES = (
     BRM_UL_source_actions,
     BRM_PT_retarget_workbench,
 )
+
+
+def _draw_bone_binding_box(layout, profile) -> None:
+    binding_box = layout.box()
+    header = binding_box.row(align=True)
+    header.label(text="Bone Binding", icon="BONE_DATA")
+    header.prop(profile, "bone_binding_highlight_enabled", text="Highlight", toggle=True)
+
+    mapped_count = len(target_bone_sets.mapped_target_names(profile))
+    physics_count = len(target_bone_sets.physics_target_names(profile.target_armature))
+    mesh_set_count = target_bone_sets.mesh_target_set_count(profile.target_armature)
+    stats = binding_box.row(align=True)
+    stats.label(text=f"Mapped {mapped_count}", icon="LINKED")
+    stats.label(text=f"Physics {physics_count}", icon="BONE_DATA")
+    stats.label(text=f"Mesh Sets {mesh_set_count}", icon="MESH_DATA")
+
+    mesh_row = binding_box.row(align=True)
+    mesh_row.operator("bone_remap.group_target_bones_by_mesh", text="Group By Mesh", icon="MESH_DATA")
+
+    physics_row = binding_box.row(align=True)
+    physics_row.operator("bone_remap.mark_selected_target_chain_as_physics", text="Mark Chain", icon="ADD")
+    physics_row.operator("bone_remap.unmark_selected_target_chain_as_physics", text="Unmark", icon="REMOVE")
+    physics_row.operator("bone_remap.select_physics_targets", text="Select", icon="RESTRICT_SELECT_OFF")
 
 
 def register():

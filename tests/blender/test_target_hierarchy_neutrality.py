@@ -16,7 +16,7 @@ import bpy
 from mathutils import Matrix
 
 import bone_remap
-from bone_remap import action_fcurves, auto_map, bake, binding, mapping, solver, state, work_pose
+from bone_remap import action_fcurves, auto_map, bake, binding, mapping, solver, state, target_bone_sets, work_pose
 
 
 EPSILON = 1.0e-5
@@ -48,6 +48,9 @@ def main() -> None:
         test_add_weighted_source_rows_uses_bound_mesh_vertex_groups()
         test_add_selected_weighted_source_rows_filters_selected_bones_by_weights()
         test_group_target_bones_by_mesh_creates_mesh_bone_collections()
+        test_mark_selected_target_chain_as_physics_updates_mapping_collection_and_color()
+        test_assign_selected_targets_unmarks_physics_target_set()
+        test_auto_match_skips_physics_target_collection_bones()
         test_auto_match_visible_meshes_uses_shared_weighted_geometry()
         test_auto_match_visible_meshes_replaces_stale_target_links_on_existing_source_rows()
         test_auto_match_visible_meshes_uses_existing_source_rows_as_candidate_filter()
@@ -672,12 +675,100 @@ def test_group_target_bones_by_mesh_creates_mesh_bone_collections() -> None:
     result = bpy.ops.bone_remap.group_target_bones_by_mesh()
 
     assert result == {"FINISHED"}
-    mesh_a_collection = target.data.collections.get(f"{binding.BONE_COLLECTION_PREFIX}BindingTargetMeshA")
-    mesh_b_collection = target.data.collections.get(f"{binding.BONE_COLLECTION_PREFIX}BindingTargetMeshB")
+    mesh_a_collection = target.data.collections.get(f"{target_bone_sets.BONE_COLLECTION_PREFIX}BindingTargetMeshA")
+    mesh_b_collection = target.data.collections.get(f"{target_bone_sets.BONE_COLLECTION_PREFIX}BindingTargetMeshB")
     assert mesh_a_collection is not None
     assert mesh_b_collection is not None
+    assert not mesh_a_collection.is_visible
+    assert not mesh_b_collection.is_visible
+    assert target_bone_sets.mesh_target_set_count(target) == 2
     assert {bone.name for bone in mesh_a_collection.bones} == {"TargetRoot"}
     assert {bone.name for bone in mesh_b_collection.bones} == {"TargetChild"}
+
+
+def test_mark_selected_target_chain_as_physics_updates_mapping_collection_and_color() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("PhysicsMarkSource", source_names())
+    target = create_two_bone_armature("PhysicsMarkTarget", target_names())
+    profile = create_profile("PhysicsMarkProfile", source, target)
+    profile.bone_binding_highlight_enabled = True
+    mapping.activate_armature_and_select_pose_bones(bpy.context, target, ["TargetChild"])
+
+    result = bpy.ops.bone_remap.mark_selected_target_chain_as_physics()
+
+    assert result == {"FINISHED"}
+    physics_collection = target.data.collections.get(target_bone_sets.PHYSICS_TARGET_COLLECTION_NAME)
+    mapped_collection = target.data.collections.get(target_bone_sets.MAPPED_TARGET_COLLECTION_NAME)
+    assert physics_collection is not None
+    assert mapped_collection is not None
+    assert not physics_collection.is_visible
+    assert not mapped_collection.is_visible
+    assert {bone.name for bone in physics_collection.bones} == {"TargetChild"}
+    assert {bone.name for bone in mapped_collection.bones} == {"TargetRoot"}
+    assert target_bone_sets.physics_target_names(target) == {"TargetChild"}
+    assert target_bone_sets.auto_match_excluded_target_names(target) == {"TargetChild"}
+    assert target_bone_sets.mapped_target_names(profile) == {"TargetRoot"}
+    assert [link.target_bone_name for link in profile.mapping_rows[0].target_links] == ["TargetRoot"]
+    assert [link.target_bone_name for link in profile.mapping_rows[1].target_links] == []
+    assert target.pose.bones["TargetRoot"].color.palette == target_bone_sets.MAPPED_TARGET_PALETTE
+    assert target.pose.bones["TargetChild"].color.palette == target_bone_sets.PHYSICS_TARGET_PALETTE
+
+
+def test_assign_selected_targets_unmarks_physics_target_set() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("PhysicsAssignSource", source_names())
+    target = create_two_bone_armature("PhysicsAssignTarget", target_names())
+    profile = create_profile("PhysicsAssignProfile", source, target)
+    mapping.activate_armature_and_select_pose_bones(bpy.context, target, ["TargetChild"])
+    assert bpy.ops.bone_remap.mark_selected_target_chain_as_physics() == {"FINISHED"}
+    assert target_bone_sets.physics_target_names(target) == {"TargetChild"}
+
+    assert bpy.ops.bone_remap.mapping_activate_source_row(mapping_index=0) == {"FINISHED"}
+    assert bpy.ops.bone_remap.mapping_assign_selected_targets() == {"FINISHED"}
+
+    assert target_bone_sets.physics_target_names(target) == set()
+    assert target_bone_sets.mapped_target_names(profile) == {"TargetRoot", "TargetChild"}
+    assert [link.target_bone_name for link in profile.mapping_rows[0].target_links] == ["TargetRoot", "TargetChild"]
+
+
+def test_auto_match_skips_physics_target_collection_bones() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("PhysicsSkipSource", source_names())
+    target = create_two_bone_armature("PhysicsSkipTarget", target_names())
+    profile = state.create_profile(bpy.context.scene, "PhysicsSkipProfile")
+    profile.source_armature = source
+    profile.target_armature = target
+    save_rest_work_pose(profile, source)
+    mapping.ensure_mapping_row(profile, "SourceRoot")
+    mapping.ensure_mapping_row(profile, "SourceChild")
+    create_bound_weighted_mesh(
+        source,
+        "PhysicsSkipSourceMesh",
+        {"SourceRoot": [(0, 1.0)], "SourceChild": [(2, 1.0)]},
+    )
+    create_bound_weighted_mesh(
+        target,
+        "PhysicsSkipTargetMesh",
+        {"TargetRoot": [(0, 1.0)], "TargetChild": [(2, 1.0)]},
+    )
+    mapping.activate_armature_and_select_pose_bones(bpy.context, target, ["TargetChild"])
+    assert bpy.ops.bone_remap.mark_selected_target_chain_as_physics() == {"FINISHED"}
+
+    assert bpy.ops.bone_remap.auto_match_add_bound_meshes() == {"FINISHED"}
+    result = bpy.ops.bone_remap.auto_match_visible_meshes()
+
+    assert result == {"FINISHED"}
+    mapping_by_source = {
+        row.source_bone_name: [link.target_bone_name for link in row.target_links]
+        for row in profile.mapping_rows
+    }
+    assert mapping_by_source == {
+        "SourceRoot": ["TargetRoot"],
+        "SourceChild": [],
+    }
 
 
 def test_auto_match_visible_meshes_uses_shared_weighted_geometry() -> None:

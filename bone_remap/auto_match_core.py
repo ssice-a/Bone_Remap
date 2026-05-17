@@ -13,7 +13,6 @@ WEIGHT_EPSILON = 1.0e-8
 DEFAULT_POINT_TARGET = 128
 DEFAULT_SEAM_POSITION_TOLERANCE = 1.0e-5
 DEFAULT_SEAM_WEIGHT_TOLERANCE = 1.0e-4
-MAX_SOURCE_CANDIDATES_PER_TARGET = 16
 MAX_VECTORIZED_DISTANCE_PAIRS = 65536
 
 
@@ -113,69 +112,6 @@ class AssignmentPlan:
 
 
 def build_assignment_plan(
-    source_clouds: Sequence[WeightedPointCloud],
-    target_clouds: Sequence[WeightedPointCloud],
-    *,
-    max_score: float | None = None,
-    candidate_max_gap: float | None = None,
-    point_target: int = DEFAULT_POINT_TARGET,
-    seam_position_tolerance: float = DEFAULT_SEAM_POSITION_TOLERANCE,
-    seam_weight_tolerance: float = DEFAULT_SEAM_WEIGHT_TOLERANCE,
-) -> AssignmentPlan:
-    """Build planned source-to-target assignments from visible weighted point clouds."""
-
-    target_clouds = build_target_seam_clusters(
-        target_clouds,
-        position_tolerance=seam_position_tolerance,
-        weight_tolerance=seam_weight_tolerance,
-    )
-    compressed_sources = tuple(
-        deterministic_point_cloud_compression(cloud, point_target=point_target)
-        for cloud in source_clouds
-        if _has_usable_points(cloud)
-    )
-    compressed_targets = tuple(
-        deterministic_point_cloud_compression(cloud, point_target=point_target)
-        for cloud in target_clouds
-        if _has_usable_points(cloud)
-    )
-    compressed_source_entries = tuple(
-        (source, _cloud_bounds(source), _weighted_centroid(source))
-        for source in compressed_sources
-    )
-    assignments: list[Assignment] = []
-
-    for target in compressed_targets:
-        best_source = None
-        best_score = float("inf")
-        target_bounds = _cloud_bounds(target)
-        target_centroid = _weighted_centroid(target)
-        for source in _candidate_sources_for_target(
-            target_bounds,
-            target_centroid,
-            compressed_source_entries,
-            max_gap=candidate_max_gap if candidate_max_gap is not None else max_score,
-        ):
-            score = bidirectional_weighted_nearest_point_distance(source, target)
-            if score < best_score:
-                best_score = score
-                best_source = source
-        if best_source is None:
-            continue
-        if max_score is not None and best_score > float(max_score):
-            continue
-        assignments.append(
-            Assignment(
-                source_name=best_source.name,
-                target_names=target.channel_names,
-                score=float(best_score),
-            )
-        )
-
-    return AssignmentPlan(assignments=tuple(assignments))
-
-
-def build_projection_assignment_plan(
     source_field: SourceWeightField,
     target_clouds: Sequence[WeightedPointCloud],
     *,
@@ -429,18 +365,6 @@ def _has_ambiguous_weight_order(
     return False
 
 
-def bidirectional_weighted_nearest_point_distance(
-    source: WeightedPointCloud,
-    target: WeightedPointCloud,
-) -> float:
-    """Return symmetric weighted nearest-point distance in visible space."""
-
-    tolerance = _match_tolerance(source.points, target.points)
-    source_to_target = _weighted_nearest_distance(source.points, source.weights, target.points, tolerance)
-    target_to_source = _weighted_nearest_distance(target.points, target.weights, source.points, tolerance)
-    return (source_to_target + target_to_source) * 0.5
-
-
 def deterministic_point_cloud_compression(
     cloud: WeightedPointCloud,
     *,
@@ -503,87 +427,6 @@ def deterministic_point_cloud_compression(
     )
 
 
-def _weighted_nearest_distance(
-    query_points: np.ndarray,
-    query_weights: np.ndarray,
-    reference_points: np.ndarray,
-    tolerance: float,
-) -> float:
-    positive = query_weights > WEIGHT_EPSILON
-    if not bool(np.any(positive)) or len(reference_points) == 0:
-        return float("inf")
-
-    query_points = query_points[positive]
-    query_weights = query_weights[positive]
-    penalty = max(_points_diag(np.vstack((query_points, reference_points))), float(tolerance) * 4.0)
-    if len(query_points) * len(reference_points) <= MAX_VECTORIZED_DISTANCE_PAIRS:
-        return _weighted_nearest_distance_vectorized(
-            query_points,
-            query_weights,
-            reference_points,
-            tolerance,
-            penalty,
-        )
-
-    spatial_hash = _build_spatial_hash(reference_points, tolerance)
-    distance_sum = 0.0
-    weight_sum = 0.0
-    for point, weight in zip(query_points, query_weights):
-        distance = _nearest_distance(point, reference_points, spatial_hash, tolerance)
-        if distance is None:
-            distance = penalty
-        distance_sum += float(distance) * float(weight)
-        weight_sum += float(weight)
-    if weight_sum <= WEIGHT_EPSILON:
-        return float("inf")
-    return distance_sum / weight_sum
-
-
-def _weighted_nearest_distance_vectorized(
-    query_points: np.ndarray,
-    query_weights: np.ndarray,
-    reference_points: np.ndarray,
-    tolerance: float,
-    penalty: float,
-) -> float:
-    deltas = query_points[:, np.newaxis, :] - reference_points[np.newaxis, :, :]
-    distances_squared = np.einsum("ijk,ijk->ij", deltas, deltas)
-    nearest_squared = np.min(distances_squared, axis=1)
-    tolerance_squared = float(tolerance) * float(tolerance)
-    distances = np.where(
-        nearest_squared <= tolerance_squared,
-        np.sqrt(nearest_squared),
-        float(penalty),
-    )
-    weight_sum = float(np.sum(query_weights))
-    if weight_sum <= WEIGHT_EPSILON:
-        return float("inf")
-    return float(np.dot(distances, query_weights) / weight_sum)
-
-
-def _nearest_distance(
-    point: np.ndarray,
-    reference_points: np.ndarray,
-    spatial_hash: dict[tuple[int, int, int], np.ndarray],
-    tolerance: float,
-) -> float | None:
-    key = _cell_key(point, tolerance)
-    candidate_indices = [
-        spatial_hash[neighbor]
-        for neighbor in _neighbor_keys(key)
-        if neighbor in spatial_hash
-    ]
-    if not candidate_indices:
-        return None
-    indices = np.concatenate(candidate_indices) if len(candidate_indices) > 1 else candidate_indices[0]
-    deltas = reference_points[indices] - point
-    distances_squared = np.einsum("ij,ij->i", deltas, deltas)
-    best = float(np.min(distances_squared))
-    if best > float(tolerance) * float(tolerance):
-        return None
-    return best ** 0.5
-
-
 def _nearest_source_indices_bruteforce(query_points: np.ndarray, source_points: np.ndarray) -> np.ndarray:
     if len(query_points) == 0:
         return np.asarray([], dtype=np.intp)
@@ -600,17 +443,6 @@ def _nearest_source_indices_bruteforce(query_points: np.ndarray, source_points: 
         distances_squared = np.einsum("ijk,ijk->ij", deltas, deltas)
         nearest_indices[start:stop] = np.argmin(distances_squared, axis=1)
     return nearest_indices
-
-
-def _build_spatial_hash(points: np.ndarray, cell_size: float) -> dict[tuple[int, int, int], np.ndarray]:
-    cell_keys = np.floor(points / max(float(cell_size), 1.0e-6)).astype(np.int64)
-    buckets: dict[tuple[int, int, int], list[int]] = {}
-    for index, cell in enumerate(cell_keys):
-        buckets.setdefault((int(cell[0]), int(cell[1]), int(cell[2])), []).append(int(index))
-    return {
-        key: np.asarray(indices, dtype=np.intp)
-        for key, indices in buckets.items()
-    }
 
 
 def _cell_key(point: Iterable[float], cell_size: float) -> tuple[int, int, int]:
@@ -631,66 +463,12 @@ def _neighbor_keys(base_key: tuple[int, int, int]):
                 yield base_x + offset_x, base_y + offset_y, base_z + offset_z
 
 
-def _match_tolerance(source_points: np.ndarray, target_points: np.ndarray) -> float:
-    points = np.vstack((source_points, target_points))
-    return max(_points_diag(points) * 0.015, 1.0e-5)
-
-
 def _points_diag(points: np.ndarray) -> float:
     if len(points) == 0:
         return 0.0
     bounds_min = np.min(points, axis=0)
     bounds_max = np.max(points, axis=0)
     return float(np.linalg.norm(bounds_max - bounds_min))
-
-
-def _candidate_sources_for_target(
-    target_bounds: tuple[np.ndarray, np.ndarray],
-    target_centroid: np.ndarray,
-    source_entries: tuple[tuple[WeightedPointCloud, tuple[np.ndarray, np.ndarray], np.ndarray], ...],
-    *,
-    max_gap: float | None,
-) -> tuple[WeightedPointCloud, ...]:
-    if max_gap is None:
-        return tuple(source for source, _bounds, _centroid in source_entries)
-
-    candidates = []
-    for source, source_bounds, source_centroid in source_entries:
-        bounds_gap = _bounds_gap(target_bounds, source_bounds)
-        if bounds_gap > float(max_gap):
-            continue
-        centroid_gap = float(np.linalg.norm(target_centroid - source_centroid))
-        candidates.append((source, bounds_gap, centroid_gap))
-
-    candidates.sort(key=lambda item: (item[1], item[2], item[0].name))
-    return tuple(
-        source
-        for source, _bounds_gap_value, _centroid_gap in candidates[:MAX_SOURCE_CANDIDATES_PER_TARGET]
-    )
-
-
-def _cloud_bounds(cloud: WeightedPointCloud) -> tuple[np.ndarray, np.ndarray]:
-    return np.min(cloud.points, axis=0), np.max(cloud.points, axis=0)
-
-
-def _weighted_centroid(cloud: WeightedPointCloud) -> np.ndarray:
-    weights = np.maximum(cloud.weights, 0.0)
-    weight_sum = float(np.sum(weights))
-    if weight_sum <= WEIGHT_EPSILON:
-        return np.mean(cloud.points, axis=0)
-    return np.sum(cloud.points * weights[:, np.newaxis], axis=0) / weight_sum
-
-
-def _bounds_gap(
-    left: tuple[np.ndarray, np.ndarray],
-    right: tuple[np.ndarray, np.ndarray],
-) -> float:
-    left_min, left_max = left
-    right_min, right_max = right
-    low_gap = right_min - left_max
-    high_gap = left_min - right_max
-    axis_gap = np.maximum(np.maximum(low_gap, high_gap), 0.0)
-    return float(np.linalg.norm(axis_gap))
 
 
 def _sample_rank(cloud: WeightedPointCloud, index: int) -> tuple[float, float, float, float]:

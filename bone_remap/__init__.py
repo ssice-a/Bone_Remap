@@ -17,6 +17,7 @@ if "properties" in locals():
         "operators",
         "work_pose",
         "runtime_plan",
+        "target_bone_sets",
         "mapping",
         "solver",
         "live_preview",
@@ -32,7 +33,7 @@ if "properties" in locals():
         if _module is not None:
             importlib.reload(_module)
 
-from . import properties, operators, work_pose, runtime_plan, mapping, solver, live_preview, motion_edit, bake, presets, auto_map, target_calibration, binding, ui
+from . import properties, operators, work_pose, runtime_plan, target_bone_sets, mapping, solver, live_preview, motion_edit, bake, presets, auto_map, target_calibration, binding, ui
 
 _MODULES = (
     properties,

@@ -43,40 +43,111 @@ def source_field(channel_names, points, influences):
 
 
 class AutoMatchCoreTests(unittest.TestCase):
-    def test_assignment_plan_uses_visible_space_weighted_point_clouds(self):
-        sources = (
-            cloud("SourceArm", [(0.0, 0.0, 0.0), (0.0, 0.1, 0.0)], [1.0, 0.8]),
-            cloud("SourceLeg", [(5.0, 0.0, 0.0), (5.0, 0.1, 0.0)], [1.0, 0.8]),
-        )
-        targets = (
-            cloud("TargetArm", [(0.0, 0.0, 0.0), (0.0, 0.1, 0.0)], [1.0, 0.8]),
-        )
-
-        plan = core.build_assignment_plan(sources, targets)
-
-        self.assertEqual(
-            [(assignment.source_name, assignment.target_names) for assignment in plan.assignments],
-            [("SourceArm", ("TargetArm",))],
-        )
-
-    def test_assignment_plan_clusters_target_channels_connected_by_matching_seam_points(self):
-        sources = (
-            cloud(
-                "SourceSleeve",
-                [(0.0, 0.0, 0.0), (0.0, 0.5, 0.0), (0.0, 1.0, 0.0), (0.0, 1.5, 0.0)],
-                [1.0, 0.8, 0.5, 1.0],
+    def test_assignment_plan_projects_target_vertices_to_source_weights(self):
+        source = source_field(
+            ("Shoulder", "UpperArm"),
+            [(0.0, 0.0, 0.0), (0.2, 0.0, 0.0), (1.0, 0.0, 0.0)],
+            (
+                ((0, 0.9), (1, 0.1)),
+                ((0, 0.8), (1, 0.2)),
+                ((0, 0.1), (1, 0.9)),
             ),
         )
         targets = (
-            cloud("TargetSleeveA", [(0.0, 0.0, 0.0), (0.0, 0.5, 0.0), (0.0, 1.0, 0.0)], [1.0, 0.8, 0.5]),
-            cloud("TargetSleeveB", [(0.0, 1.0, 0.0), (0.0, 1.5, 0.0)], [0.5, 1.0]),
+            cloud("TargetShoulderPiece", [(0.0, 0.0, 0.0), (0.2, 0.0, 0.0)], [1.0, 1.0]),
+            cloud("TargetArmPiece", [(1.0, 0.0, 0.0)], [1.0]),
         )
 
-        plan = core.build_assignment_plan(sources, targets)
+        plan = core.build_assignment_plan(source, targets)
+
+        self.assertEqual(
+            [(assignment.source_name, assignment.target_names) for assignment in plan.assignments],
+            [
+                ("Shoulder", ("TargetShoulderPiece",)),
+                ("UpperArm", ("TargetArmPiece",)),
+            ],
+        )
+
+    def test_assignment_plan_uses_visible_space_nearest_source_weights(self):
+        source = source_field(
+            ("LeftArm", "RightArm"),
+            [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0)],
+            (
+                ((0, 1.0),),
+                ((1, 1.0),),
+            ),
+        )
+        targets = (
+            cloud("VisibleRightTarget", [(10.0, 0.0, 0.0), (10.0, 0.2, 0.0)], [1.0, 0.5]),
+        )
+
+        plan = core.build_assignment_plan(source, targets)
+
+        self.assertEqual(plan.assignments[0].source_name, "RightArm")
+        self.assertEqual(plan.assignments[0].target_names, ("VisibleRightTarget",))
+
+    def test_assignment_plan_keeps_target_seam_pieces_together(self):
+        source = source_field(
+            ("Neck", "Head"),
+            [(0.0, 0.0, 1.0), (0.0, 0.0, 1.2)],
+            (
+                ((0, 0.85), (1, 0.15)),
+                ((0, 0.2), (1, 0.8)),
+            ),
+        )
+        targets = (
+            cloud("NeckSeamA", [(0.0, 0.0, 1.0)], [1.0], seam_ids=(("mesh_a", 7),)),
+            cloud("NeckSeamB", [(0.0, 0.0, 1.0)], [1.0], seam_ids=(("mesh_b", 9),)),
+        )
+
+        plan = core.build_assignment_plan(source, targets)
 
         self.assertEqual(len(plan.assignments), 1)
-        self.assertEqual(plan.assignments[0].source_name, "SourceSleeve")
-        self.assertEqual(plan.assignments[0].target_names, ("TargetSleeveA", "TargetSleeveB"))
+        self.assertEqual(plan.assignments[0].source_name, "Neck")
+        self.assertEqual(plan.assignments[0].target_names, ("NeckSeamA", "NeckSeamB"))
+
+    def test_assignment_plan_rejects_targets_outside_projection_distance(self):
+        source = source_field(
+            ("Body",),
+            [(0.0, 0.0, 0.0)],
+            (((0, 1.0),),),
+        )
+        targets = (
+            cloud("FarTarget", [(10.0, 0.0, 0.0)], [1.0]),
+        )
+
+        plan = core.build_assignment_plan(source, targets, max_projection_distance=1.0)
+
+        self.assertEqual(plan.assignments, ())
+
+    def test_assignment_plan_can_require_clear_winner(self):
+        source = source_field(
+            ("Left", "Right"),
+            [(0.0, 0.0, 0.0)],
+            (((0, 0.51), (1, 0.49)),),
+        )
+        targets = (
+            cloud("AmbiguousTarget", [(0.0, 0.0, 0.0)], [1.0]),
+        )
+
+        accepted = core.build_assignment_plan(source, targets, min_winner_ratio=0.5)
+        rejected = core.build_assignment_plan(source, targets, min_winner_ratio=0.75)
+
+        self.assertEqual(accepted.assignments[0].source_name, "Left")
+        self.assertEqual(rejected.assignments, ())
+
+    def test_assignment_plan_does_not_mutate_target_cloud_weights(self):
+        source = source_field(
+            ("Root",),
+            [(0.0, 0.0, 0.0)],
+            (((0, 1.0),),),
+        )
+        target = cloud("Target", [(0.0, 0.0, 0.0)], [0.75])
+        original_weights = target.weights.copy()
+
+        core.build_assignment_plan(source, (target,))
+
+        np.testing.assert_array_equal(target.weights, original_weights)
 
     def test_target_seam_cluster_requires_distinct_seam_vertices(self):
         targets = (
@@ -135,124 +206,6 @@ class AutoMatchCoreTests(unittest.TestCase):
         self.assertIn(50.0, xs)
         self.assertLessEqual(xs[0], 5.0)
         self.assertGreaterEqual(xs[-1], 95.0)
-
-    def test_bidirectional_score_rejects_one_way_containment_match(self):
-        sources = (
-            cloud("SmallSource", [(0.0, 0.0, 0.0), (0.0, 0.1, 0.0)], [1.0, 1.0]),
-            cloud("LargeSource", [(0.0, 0.0, 0.0), (0.0, 0.1, 0.0), (0.0, 2.0, 0.0)], [1.0, 1.0, 1.0]),
-        )
-        targets = (
-            cloud("SmallTarget", [(0.0, 0.0, 0.0), (0.0, 0.1, 0.0)], [1.0, 1.0]),
-        )
-
-        plan = core.build_assignment_plan(sources, targets)
-
-        self.assertEqual(plan.assignments[0].source_name, "SmallSource")
-
-    def test_visible_space_position_is_match_evidence(self):
-        sources = (
-            cloud("LeftSource", [(0.0, 0.0, 0.0), (0.0, 0.2, 0.0)], [1.0, 1.0]),
-            cloud("RightSource", [(10.0, 0.0, 0.0), (10.0, 0.2, 0.0)], [1.0, 1.0]),
-        )
-        targets = (
-            cloud("RightTarget", [(10.0, 0.0, 0.0), (10.0, 0.2, 0.0)], [1.0, 1.0]),
-        )
-
-        plan = core.build_assignment_plan(sources, targets)
-
-        self.assertEqual(plan.assignments[0].source_name, "RightSource")
-
-    def test_assignment_plan_can_reject_targets_above_score_limit(self):
-        sources = (
-            cloud("SourceOnly", [(0.0, 0.0, 0.0), (0.0, 0.2, 0.0)], [1.0, 1.0]),
-        )
-        targets = (
-            cloud("FarTarget", [(10.0, 0.0, 0.0), (10.0, 0.2, 0.0)], [1.0, 1.0]),
-        )
-
-        plan = core.build_assignment_plan(sources, targets, max_score=1.0)
-
-        self.assertEqual(plan.assignments, ())
-
-    def test_candidate_gap_filters_candidates_without_rejecting_by_score(self):
-        sources = (
-            cloud("SourceOnly", [(0.0, 0.0, 0.0), (0.0, 0.2, 0.0)], [1.0, 1.0]),
-        )
-        targets = (
-            cloud("FarTarget", [(10.0, 0.0, 0.0), (10.0, 0.2, 0.0)], [1.0, 1.0]),
-        )
-
-        broad_plan = core.build_assignment_plan(sources, targets, candidate_max_gap=20.0)
-        narrow_plan = core.build_assignment_plan(sources, targets, candidate_max_gap=1.0)
-
-        self.assertEqual(broad_plan.assignments[0].source_name, "SourceOnly")
-        self.assertEqual(narrow_plan.assignments, ())
-
-    def test_candidate_cap_keeps_nearest_centroid_when_bounds_overlap(self):
-        sources = []
-        for index in range(40):
-            x = 0.1 + index * 0.02
-            sources.append(
-                cloud(
-                    f"Source{index:02d}",
-                    [(0.0, 0.0, 0.0), (x, 0.0, 0.0), (1.0, 0.0, 0.0)],
-                    [0.1, 10.0, 0.1],
-                )
-            )
-        target = cloud(
-            "TargetLate",
-            [(0.0, 0.0, 0.0), (0.1 + 39 * 0.02, 0.0, 0.0), (1.0, 0.0, 0.0)],
-            [0.1, 10.0, 0.1],
-        )
-
-        plan = core.build_assignment_plan(tuple(sources), (target,), max_score=1.0)
-
-        self.assertEqual(plan.assignments[0].source_name, "Source39")
-
-    def test_projection_assignment_uses_source_weights_at_overlapping_target_vertices(self):
-        source = source_field(
-            ("Shoulder", "UpperArm"),
-            [(0.0, 0.0, 0.0), (0.2, 0.0, 0.0), (1.0, 0.0, 0.0)],
-            (
-                ((0, 0.9), (1, 0.1)),
-                ((0, 0.8), (1, 0.2)),
-                ((0, 0.1), (1, 0.9)),
-            ),
-        )
-        targets = (
-            cloud("TargetShoulderPiece", [(0.0, 0.0, 0.0), (0.2, 0.0, 0.0)], [1.0, 1.0]),
-            cloud("TargetArmPiece", [(1.0, 0.0, 0.0)], [1.0]),
-        )
-
-        plan = core.build_projection_assignment_plan(source, targets)
-
-        self.assertEqual(
-            [(assignment.source_name, assignment.target_names) for assignment in plan.assignments],
-            [
-                ("Shoulder", ("TargetShoulderPiece",)),
-                ("UpperArm", ("TargetArmPiece",)),
-            ],
-        )
-
-    def test_projection_assignment_keeps_target_seam_pieces_together(self):
-        source = source_field(
-            ("Neck", "Head"),
-            [(0.0, 0.0, 1.0), (0.0, 0.0, 1.2)],
-            (
-                ((0, 0.85), (1, 0.15)),
-                ((0, 0.2), (1, 0.8)),
-            ),
-        )
-        targets = (
-            cloud("NeckSeamA", [(0.0, 0.0, 1.0)], [1.0], seam_ids=(("mesh_a", 7),)),
-            cloud("NeckSeamB", [(0.0, 0.0, 1.0)], [1.0], seam_ids=(("mesh_b", 9),)),
-        )
-
-        plan = core.build_projection_assignment_plan(source, targets)
-
-        self.assertEqual(len(plan.assignments), 1)
-        self.assertEqual(plan.assignments[0].source_name, "Neck")
-        self.assertEqual(plan.assignments[0].target_names, ("NeckSeamA", "NeckSeamB"))
 
 
 if __name__ == "__main__":

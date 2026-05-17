@@ -9,7 +9,7 @@ from bpy.types import Operator
 from mathutils.kdtree import KDTree
 import numpy as np
 
-from . import auto_match_core, mapping, runtime_plan, state, weighted_geometry
+from . import auto_match_core, mapping, runtime_plan, state, target_bone_sets, weighted_geometry
 from .registration import register_classes, unregister_classes
 
 
@@ -49,6 +49,7 @@ def auto_match_active_profile(context) -> tuple[int, str]:
             context,
             target_meshes,
             active_context.target_armature,
+            excluded_bone_names=target_bone_sets.auto_match_excluded_target_names(active_context.target_armature),
         )
         target_seconds = perf_counter() - target_started_at
     finally:
@@ -59,7 +60,7 @@ def auto_match_active_profile(context) -> tuple[int, str]:
         return 0, "No usable target weighted point clouds with exact bone-name vertex groups."
 
     plan_started_at = perf_counter()
-    plan = auto_match_core.build_projection_assignment_plan(
+    plan = auto_match_core.build_assignment_plan(
         source_field,
         target_clouds,
         max_projection_distance=_projection_max_distance(source_field, target_clouds),
@@ -68,6 +69,7 @@ def auto_match_active_profile(context) -> tuple[int, str]:
     plan_seconds = perf_counter() - plan_started_at
     apply_started_at = perf_counter()
     matched = apply_assignment_plan(profile, plan, source_row_names=source_filter)
+    target_bone_sets.sync_profile_target_sets(profile)
     apply_seconds = perf_counter() - apply_started_at
     if matched:
         _solve_live_preview_if_enabled(context)
@@ -176,14 +178,6 @@ def _add_mesh_refs(collection, meshes: list) -> int:
         existing.add(pointer)
         added += 1
     return added
-
-
-def _candidate_gap(
-    source_clouds: tuple[auto_match_core.WeightedPointCloud, ...],
-    target_clouds: tuple[auto_match_core.WeightedPointCloud, ...],
-) -> float:
-    diag = weighted_geometry.visible_point_cloud_diag((*source_clouds, *target_clouds))
-    return max(MIN_SCORE_LIMIT, float(diag) * CANDIDATE_GAP_RATIO)
 
 
 def _projection_max_distance(

@@ -96,11 +96,18 @@ def weighted_regions(meshes, armature) -> list[WeightedRegion]:
     return regions
 
 
-def visible_weighted_point_clouds(context, meshes, armature) -> tuple[auto_match_core.WeightedPointCloud, ...]:
+def visible_weighted_point_clouds(
+    context,
+    meshes,
+    armature,
+    excluded_bone_names: set[str] | tuple[str, ...] | None = None,
+) -> tuple[auto_match_core.WeightedPointCloud, ...]:
     """Sample evaluated visible mesh vertices into per-bone weighted point clouds."""
 
     depsgraph = context.evaluated_depsgraph_get()
     bone_names = {bone.name for bone in armature.pose.bones}
+    if excluded_bone_names is not None:
+        bone_names -= set(excluded_bone_names)
     accumulators: dict[str, dict[str, list]] = {}
 
     for mesh_obj in meshes:
