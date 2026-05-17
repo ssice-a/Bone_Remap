@@ -61,14 +61,24 @@ def add_source_action(context, profile, source_armature: Object, action) -> int:
     return index
 
 
-def bind_active_source_action(profile, source_armature: Object, context=None):
+def bind_active_source_action(profile, source_armature: Object, context=None, fast_if_unchanged: bool = False):
     action = _selected_source_action(source_armature) or profile.active_motion_action
     if action is None:
         return None
 
+    animation_data = source_armature.animation_data
+    if (
+        fast_if_unchanged
+        and animation_data is not None
+        and animation_data.action == action
+        and getattr(animation_data, "action_slot", None) is not None
+    ):
+        return action
+
     animation_data = source_armature.animation_data_create()
     changed = animation_data.action != action
     if changed:
+        action_slots.clear_action_slot(animation_data)
         animation_data.action = action
     old_slot = getattr(animation_data, "action_slot", None)
     action_slots.sync_action_slot(animation_data)

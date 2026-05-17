@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from array import array
 from time import perf_counter
 
 from bpy.types import Object
 from mathutils import Matrix
+
+
+_BATCH_WRITE_MIN_BONES = 128
+_BATCH_WRITE_MIN_COVERAGE = 0.5
 
 
 def capture_pose_matrix_map(armature: Object, bone_names: Iterable[str] | None = None) -> dict[str, Matrix]:
@@ -68,6 +73,33 @@ def apply_pose_matrix_map(
     _record_timing(timings, "apply_basis_ms", basis_started_at)
 
     write_started_at = perf_counter()
+    applied = (
+        _batch_write_matrix_basis(armature, data_bones, basis_matrix_map, timings)
+        if _should_batch_write(armature, data_bones, update_view_layer)
+        else _loop_write_matrix_basis(armature, data_bones, basis_matrix_map)
+    )
+    _record_timing(timings, "apply_write_ms", write_started_at)
+
+    if applied and update_view_layer:
+        update_started_at = perf_counter()
+        context.view_layer.update()
+        _record_timing(timings, "apply_view_update_ms", update_started_at)
+    return applied
+
+
+def _should_batch_write(armature: Object, data_bones: tuple, update_view_layer: bool) -> bool:
+    if not update_view_layer:
+        return False
+    pose_bone_count = len(armature.pose.bones)
+    data_bone_count = len(data_bones)
+    if pose_bone_count <= 0:
+        return False
+    if data_bone_count < _BATCH_WRITE_MIN_BONES:
+        return False
+    return (data_bone_count / pose_bone_count) >= _BATCH_WRITE_MIN_COVERAGE
+
+
+def _loop_write_matrix_basis(armature: Object, data_bones: tuple, basis_matrix_map: dict[str, Matrix]) -> int:
     applied = 0
     for data_bone in data_bones:
         basis_matrix = basis_matrix_map.get(data_bone.name)
@@ -76,12 +108,45 @@ def apply_pose_matrix_map(
             continue
         pose_bone.matrix_basis = basis_matrix
         applied += 1
-    _record_timing(timings, "apply_write_ms", write_started_at)
+    return applied
 
-    if applied and update_view_layer:
-        update_started_at = perf_counter()
-        context.view_layer.update()
-        _record_timing(timings, "apply_view_update_ms", update_started_at)
+
+def _batch_write_matrix_basis(
+    armature: Object,
+    data_bones: tuple,
+    basis_matrix_map: dict[str, Matrix],
+    timings: dict[str, float] | None,
+) -> int:
+    pose_bones = armature.pose.bones
+    name_to_index = {pose_bone.name: index for index, pose_bone in enumerate(pose_bones)}
+
+    flat = array("f", [0.0]) * (len(pose_bones) * 16)
+    get_started_at = perf_counter()
+    pose_bones.foreach_get("matrix_basis", flat)
+    _record_timing(timings, "apply_foreach_get_ms", get_started_at)
+
+    applied = 0
+    for data_bone in data_bones:
+        basis_matrix = basis_matrix_map.get(data_bone.name)
+        pose_bone_index = name_to_index.get(data_bone.name)
+        if basis_matrix is None or pose_bone_index is None:
+            continue
+
+        offset = pose_bone_index * 16
+        for row_index in range(4):
+            row = basis_matrix[row_index]
+            row_offset = offset + row_index * 4
+            flat[row_offset + 0] = row[0]
+            flat[row_offset + 1] = row[1]
+            flat[row_offset + 2] = row[2]
+            flat[row_offset + 3] = row[3]
+        applied += 1
+
+    set_started_at = perf_counter()
+    pose_bones.foreach_set("matrix_basis", flat)
+    _record_timing(timings, "apply_foreach_set_ms", set_started_at)
+    if timings is not None:
+        timings["apply_batch_write"] = 1.0
     return applied
 
 

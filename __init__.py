@@ -10,7 +10,12 @@ bl_info = {
     "category": "Animation",
 }
 
-from . import bone_remap
+if "bone_remap" in locals():
+    import importlib
+
+    importlib.reload(bone_remap)
+else:
+    from . import bone_remap
 
 
 def register():

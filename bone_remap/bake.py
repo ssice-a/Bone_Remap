@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Operator
 
-from . import live_preview, motion_edit, runtime_plan, state
+from . import action_fcurves, live_preview, motion_edit, runtime_plan, state
 from .registration import register_classes, unregister_classes
 
 
@@ -84,7 +84,7 @@ def _clear_bake_scope(action, target_bone_names: list[str], frame_start: int, fr
         scoped_paths.add(prefix + "rotation_axis_angle")
         scoped_paths.add(prefix + "scale")
 
-    for fcurve in list(action.fcurves):
+    for owner, fcurve in list(action_fcurves.iter_action_fcurve_owners(action)):
         if fcurve.data_path not in scoped_paths:
             continue
         for keyframe in list(fcurve.keyframe_points):
@@ -92,7 +92,7 @@ def _clear_bake_scope(action, target_bone_names: list[str], frame_start: int, fr
             if frame_start <= frame <= frame_end:
                 fcurve.keyframe_points.remove(keyframe, fast=True)
         if len(fcurve.keyframe_points) == 0:
-            action.fcurves.remove(fcurve)
+            action_fcurves.remove_action_fcurve(owner, fcurve)
         else:
             fcurve.update()
 

@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 import bpy
+from mathutils import Matrix
 
 import bone_remap
 from bone_remap import bake, solver, state, work_pose
@@ -29,6 +30,9 @@ def main() -> None:
         test_solve_toggle_operator_is_single_source_of_live_solve_state()
         test_solve_toggle_writes_visible_target_result()
         test_live_solve_updates_after_source_pose_change()
+        test_depsgraph_live_preview_skips_playback()
+        test_depsgraph_live_preview_does_not_dirty_runtime_plan()
+        test_live_apply_without_view_update_uses_notifying_pose_writes()
         test_partial_solve_only_writes_affected_target_scope()
         test_partial_solve_rewrites_descendant_target_scope()
         test_live_preview_ignores_target_only_updates()
@@ -38,6 +42,7 @@ def main() -> None:
         test_source_action_selection_solves_live_preview_immediately()
         test_live_preview_rebinds_selected_source_action_when_animation_data_action_is_cleared()
         test_source_action_selection_preserves_imported_action_slot_under_work_pose_layer()
+        test_playback_frame_handler_solves_live_preview()
         test_add_weighted_source_rows_uses_bound_mesh_vertex_groups()
         test_auto_match_visible_meshes_uses_shared_weighted_geometry()
         test_auto_match_visible_meshes_replaces_stale_mapping_rows()
@@ -142,6 +147,104 @@ def test_live_solve_updates_after_source_pose_change() -> None:
         },
         visible_pose_matrices(target, target_names()),
     )
+
+
+def test_depsgraph_live_preview_skips_playback() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("PlaybackGateSource", source_names())
+    target = create_two_bone_armature("PlaybackGateTarget", target_names())
+    profile = create_profile("PlaybackGateProfile", source, target)
+    profile.live_preview_enabled = True
+
+    from bone_remap import live_preview
+
+    solve_calls = []
+    original_is_animation_playing = live_preview._is_animation_playing
+    original_relevant = live_preview._depsgraph_update_relevant
+    original_changed = live_preview._source_bone_names_changed
+    original_solve_now = live_preview.solve_now
+
+    def counted_solve_now(*args, **kwargs):
+        solve_calls.append(kwargs.get("reason", "unknown"))
+        return None
+
+    live_preview._is_animation_playing = lambda context: True
+    live_preview._depsgraph_update_relevant = lambda scene, depsgraph: True
+    live_preview._source_bone_names_changed = lambda active_context, depsgraph: ("SourceRoot",)
+    live_preview.solve_now = counted_solve_now
+    try:
+        live_preview._depsgraph_update_post(bpy.context.scene, bpy.context.evaluated_depsgraph_get())
+    finally:
+        live_preview._is_animation_playing = original_is_animation_playing
+        live_preview._depsgraph_update_relevant = original_relevant
+        live_preview._source_bone_names_changed = original_changed
+        live_preview.solve_now = original_solve_now
+
+    assert solve_calls == []
+
+
+def test_depsgraph_live_preview_does_not_dirty_runtime_plan() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("PlanDirtySource", source_names())
+    target = create_two_bone_armature("PlanDirtyTarget", target_names())
+    profile = create_profile("PlanDirtyProfile", source, target)
+    profile.live_preview_enabled = True
+
+    from bone_remap import live_preview, runtime_plan
+
+    invalidations = []
+    original_is_animation_playing = live_preview._is_animation_playing
+    original_relevant = live_preview._depsgraph_update_relevant
+    original_changed = live_preview._source_bone_names_changed
+    original_invalidate = runtime_plan.invalidate_runtime_plan
+
+    live_preview._is_animation_playing = lambda context: False
+    live_preview._depsgraph_update_relevant = lambda scene, depsgraph: True
+    live_preview._source_bone_names_changed = lambda active_context, depsgraph: ()
+    runtime_plan.invalidate_runtime_plan = lambda dirty_profile: invalidations.append(dirty_profile.name)
+    try:
+        live_preview._depsgraph_update_post(bpy.context.scene, bpy.context.evaluated_depsgraph_get())
+    finally:
+        live_preview._is_animation_playing = original_is_animation_playing
+        live_preview._depsgraph_update_relevant = original_relevant
+        live_preview._source_bone_names_changed = original_changed
+        runtime_plan.invalidate_runtime_plan = original_invalidate
+
+    assert invalidations == []
+
+
+def test_live_apply_without_view_update_uses_notifying_pose_writes() -> None:
+    clear_scene()
+
+    target = create_two_bone_armature("NoBatchLiveTarget", target_names())
+    matrix_by_bone = {
+        "TargetRoot": Matrix.Rotation(0.25, 4, "Z"),
+        "TargetChild": Matrix.Rotation(0.15, 4, "X"),
+    }
+
+    from bone_remap import pose_matrices
+
+    original_min_bones = pose_matrices._BATCH_WRITE_MIN_BONES
+    original_min_coverage = pose_matrices._BATCH_WRITE_MIN_COVERAGE
+    pose_matrices._BATCH_WRITE_MIN_BONES = 1
+    pose_matrices._BATCH_WRITE_MIN_COVERAGE = 0.0
+    timings = {}
+    try:
+        written = pose_matrices.apply_pose_matrix_map(
+            bpy.context,
+            target,
+            matrix_by_bone,
+            update_view_layer=False,
+            timings=timings,
+        )
+    finally:
+        pose_matrices._BATCH_WRITE_MIN_BONES = original_min_bones
+        pose_matrices._BATCH_WRITE_MIN_COVERAGE = original_min_coverage
+
+    assert written == 2
+    assert "apply_batch_write" not in timings
 
 
 def test_partial_solve_only_writes_affected_target_scope() -> None:
@@ -425,6 +528,40 @@ def test_source_action_selection_preserves_imported_action_slot_under_work_pose_
     result = solver.solve_active_profile_one_frame(bpy.context)
     assert result.written_targets == 2
     assert abs(target.pose.bones["TargetRoot"].rotation_euler.z) > 0.1
+
+
+def test_playback_frame_handler_solves_live_preview() -> None:
+    clear_scene()
+
+    source = create_two_bone_armature("PlaybackLiveSource", source_names())
+    target = create_two_bone_armature("PlaybackLiveTarget", target_names())
+    profile = create_profile("PlaybackLiveProfile", source, target)
+    action = bpy.data.actions.new("PlaybackLiveMotion")
+    source.animation_data_create().action = action
+    profile.active_motion_action = action
+    key_source_pose(source, frame=1, parent_rotation_z=0.1, child_rotation_x=0.0)
+    key_source_pose(source, frame=2, parent_rotation_z=0.4, child_rotation_x=0.3)
+    profile.live_preview_enabled = True
+
+    from bone_remap import live_preview, solver as solver_module
+
+    solve_calls = []
+    original_is_animation_playing = live_preview._is_animation_playing
+    original_solve_profile_one_frame = solver_module.solve_profile_one_frame
+
+    def counted_solve_profile_one_frame(*args, **kwargs):
+        solve_calls.append(1)
+        return original_solve_profile_one_frame(*args, **kwargs)
+
+    live_preview._is_animation_playing = lambda context: True
+    solver_module.solve_profile_one_frame = counted_solve_profile_one_frame
+    try:
+        live_preview._frame_change_post(bpy.context.scene, bpy.context.evaluated_depsgraph_get())
+    finally:
+        live_preview._is_animation_playing = original_is_animation_playing
+        solver_module.solve_profile_one_frame = original_solve_profile_one_frame
+
+    assert solve_calls == [1]
 
 
 def test_add_weighted_source_rows_uses_bound_mesh_vertex_groups() -> None:

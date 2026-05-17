@@ -30,6 +30,7 @@ def solve_active_profile_one_frame(
     depsgraph=None,
     update_view_layer: bool = True,
     source_bone_names: Iterable[str] | None = None,
+    bind_source_action: bool = True,
 ) -> SolveResult:
     active_context = state.get_active_profile_context(context.scene)
     if active_context is None:
@@ -43,6 +44,7 @@ def solve_active_profile_one_frame(
         depsgraph=depsgraph,
         update_view_layer=update_view_layer,
         source_bone_names=source_bone_names,
+        bind_source_action=bind_source_action,
     )
 
 
@@ -54,13 +56,15 @@ def solve_profile_one_frame(
     depsgraph=None,
     update_view_layer: bool = True,
     source_bone_names: Iterable[str] | None = None,
+    bind_source_action: bool = True,
 ) -> SolveResult:
     total_started_at = perf_counter()
     if source_armature.mode == "EDIT" or target_armature.mode == "EDIT":
         return _error_result("Leave armature edit mode before solving.", total_started_at)
-    from . import motion_edit
+    if bind_source_action:
+        from . import motion_edit
 
-    motion_edit.bind_active_source_action(profile, source_armature)
+        motion_edit.bind_active_source_action(profile, source_armature)
 
     plan_started_at = perf_counter()
     plan = runtime_plan.build_runtime_plan(profile, source_armature, target_armature)

@@ -33,21 +33,25 @@ def sync_active_motion_action(self, context) -> None:
         return
 
     animation_data = source.animation_data_create()
+    if animation_data.action != self.active_motion_action:
+        from . import action_slots
+
+        action_slots.clear_action_slot(animation_data)
     animation_data.action = self.active_motion_action
     from . import action_slots
 
     if self.active_motion_action is None:
         action_slots.clear_action_slot(animation_data)
     else:
-        action_slots.sync_action_slot(animation_data)
+        action_slots.sync_action_slot(animation_data, force=True)
     if context is not None:
+        context.scene.frame_set(context.scene.frame_current)
         if self.active_motion_action is not None:
             from . import live_preview, work_pose, work_pose_layer
 
             if work_pose.has_saved_work_pose(self):
                 work_pose_layer.ensure_work_pose_layer(context, self, source)
             live_preview.solve_if_enabled(context, reason="source_action_change")
-        context.view_layer.update()
 
 
 def sync_active_source_action_index(self, context) -> None:
@@ -66,13 +70,17 @@ def sync_active_source_action_index(self, context) -> None:
         profile.active_motion_action = action
     else:
         animation_data = source.animation_data_create()
+        if animation_data.action != action:
+            from . import action_slots
+
+            action_slots.clear_action_slot(animation_data)
         animation_data.action = action
         from . import action_slots
 
         if action is None:
             action_slots.clear_action_slot(animation_data)
         else:
-            action_slots.sync_action_slot(animation_data)
+            action_slots.sync_action_slot(animation_data, force=True)
         context.view_layer.update()
 
 

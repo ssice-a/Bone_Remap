@@ -29,7 +29,7 @@ def pick_matching_action_slot(action_slots, preferred_slot=None):
     return slots[0]
 
 
-def sync_action_slot(target, preferred_slot=None):
+def sync_action_slot(target, preferred_slot=None, force: bool = False):
     if target is None or not hasattr(target, "action_slot"):
         return None
 

@@ -66,12 +66,18 @@ def solve_now(
     try:
         from . import motion_edit
 
-        motion_edit.bind_active_source_action(active_context.profile, active_context.source_armature, context)
+        motion_edit.bind_active_source_action(
+            active_context.profile,
+            active_context.source_armature,
+            context,
+            fast_if_unchanged=reason == "frame_change",
+        )
         result = solver.solve_active_profile_one_frame(
             context,
             depsgraph=depsgraph,
             update_view_layer=update_view_layer,
             source_bone_names=source_bone_names,
+            bind_source_action=False,
         )
         if pre_solve_timings:
             result.timings.update(pre_solve_timings)
@@ -89,10 +95,19 @@ def solve_now(
             + result.timings.get("source_compare_ms", 0.0)
             + result.timings.get("source_cache_ms", 0.0)
         )
-        _record_live_result(active_context.profile, result, reason, replace_written_targets=source_bone_names is None)
+        if _should_record_live_result(active_context.profile, result, reason):
+            _record_live_result(active_context.profile, result, reason, replace_written_targets=source_bone_names is None)
         return result
     finally:
         _IS_SOLVING = False
+
+
+def _should_record_live_result(profile, result: solver.SolveResult, reason: str) -> bool:
+    if reason != "frame_change":
+        return True
+    if getattr(profile, "live_preview_perf_logging", False):
+        return True
+    return any(message.severity == "ERROR" for message in result.messages)
 
 
 def _record_live_result(profile, result: solver.SolveResult, reason: str, replace_written_targets: bool = True) -> None:
@@ -286,9 +301,6 @@ def _frame_change_post(scene, depsgraph=None):
     active_context = state.get_active_profile_context(scene)
     if active_context is None:
         return
-    from . import motion_edit
-
-    motion_edit.bind_active_source_action(active_context.profile, active_context.source_armature, context)
 
     active_depsgraph = depsgraph or context.evaluated_depsgraph_get()
     compare_started_at = perf_counter()
@@ -317,14 +329,11 @@ def _depsgraph_update_post(scene, depsgraph):
     context = _current_context_for_scene(scene)
     if context is None:
         return
+    if _is_animation_playing(context):
+        return
     active_context = state.get_active_profile_context(scene)
     if active_context is None:
         return
-    from . import motion_edit
-
-    motion_edit.bind_active_source_action(active_context.profile, active_context.source_armature, context)
-    if _armature_data_updated(active_context, depsgraph):
-        runtime_plan.invalidate_runtime_plan(active_context.profile)
     if not _depsgraph_update_relevant(scene, depsgraph):
         return
     compare_started_at = perf_counter()
@@ -343,13 +352,9 @@ def _depsgraph_update_post(scene, depsgraph):
     )
 
 
-def _armature_data_updated(active_context, depsgraph) -> bool:
-    source_data = active_context.source_armature.data
-    target_data = active_context.target_armature.data
-    return any(
-        _same_id(update.id, source_data) or _same_id(update.id, target_data)
-        for update in depsgraph.updates
-    )
+def _is_animation_playing(context) -> bool:
+    screen = getattr(context, "screen", None)
+    return bool(screen is not None and getattr(screen, "is_animation_playing", False))
 
 
 def _append_once(handler_list, handler) -> None:
